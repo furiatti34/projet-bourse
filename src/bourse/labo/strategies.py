@@ -44,7 +44,14 @@ class LabPrudent(PrudentStrategy):
 
     def targets(self, state: dict) -> dict[str, float]:
         """Carnet n°8 : obligations seulement si leur cours est au-dessus de sa moyenne 200 jours
-        (`obligations_tendance`) ; sinon cette part va au placement sans risque."""
+        (`obligations_tendance`) ; sinon cette part va au placement sans risque.
+        Carnet n°12 : quand l'indice mondial est au-dessus de ses moyennes 50 et 200 jours, la part d'actions
+        ne descend pas sous `actions_min_tendance`."""
+        floor = self.params.get("actions_min_tendance")
+        world = self.view.asset(self.params["titre_actions"])
+        if floor and world is not None and world.above_ma200 and world.above_ma50:
+            self.params = {**self.params, "actions_min": max(self.params["actions_min"], floor)}
+            self.think(f"Le marché mondial est en tendance haussière : au moins {floor:.0%} d'actions.")
         targets = super().targets(state)
         p = self.params
         bonds = self.view.asset(p["titre_obligations"])
@@ -73,6 +80,15 @@ class LabOpportuniste(OpportunisteStrategy):
             return base
         free = 1 - CASH_BUFFER - self.params["mise_par_occasion"] - getattr(self, "_occupied", 0.0)
         return round(max(base, free), 3)
+
+    def hunt_sales(self, broker, state) -> None:
+        """Carnet n°13 : pas de « soldes » quand le marché mondial lui-même est sous sa moyenne 200 jours
+        (`soldes_si_monde_haussier`) : dans un marché qui baisse, ce qui baisse n'est pas en solde."""
+        world = self.view.asset(self.params["titre_coeur"])
+        if self.params.get("soldes_si_monde_haussier") and world is not None and not world.above_ma200:
+            self.think("Le marché mondial est sous sa moyenne 200 jours : je ne cherche pas de soldes.")
+            return
+        super().hunt_sales(broker, state)
 
     def manage_trades(self, broker, state) -> None:
         """Carnet n°9 : une occasion est revendue dès que le rebond est fait (RSI revenu au-dessus de
@@ -141,11 +157,45 @@ class LabAudacieux(AudacieuxStrategy):
         state["compagnon"] = best.ticker
         self.think(f"Marché d'accompagnement : {best.label} (élan {best.momentum:+.1f}"
                    + (", gardé car encore dans le haut du classement)" if current and best is not ranked[0] else ")"))
-        return {p["titre_attaque"]: 0.50, best.ticker: round(full - 0.50, 3)}
+        attack = p["titre_attaque"]
+        nasdaq = self.view.asset(NASDAQ)
+        if p.get("neutre_sans_levier_si_baisse") and nasdaq is not None and not nasdaq.above_ma50:
+            attack = NASDAQ   # carnet n°14 : Nasdaq ×1 au lieu de ×2 quand il est sous sa moyenne 50 jours
+            self.think("Le Nasdaq est sous sa moyenne 50 jours : ma moitié Nasdaq passe sans levier.")
+        return {attack: 0.50, best.ticker: round(full - 0.50, 3)}
 
 
 class LabKamikaze(KamikazeStrategy):
     name = "labo_kamikaze"
+
+    def guard_positions(self, broker, state, now: datetime) -> bool:
+        """Carnet n°15 : avec `stop_selon_levier`, le stop-loss vaut `stop_perte` × le levier du placement
+        (7 % du marché sous-jacent : −21 % sur un ×3), au lieu de −7 % quel que soit le levier."""
+        if not self.params.get("stop_selon_levier") or self.view is None:
+            return super().guard_positions(broker, state, now)
+        base = self.params["stop_perte"]
+        sold = False
+        for pos in broker.positions():
+            asset = self.view.asset(pos["ticker"])
+            lev = abs(asset.leverage) if asset else 1
+            self.params = {**self.params, "stop_perte": base * max(1, lev)}
+            sold |= self._guard_one(broker, state, now, pos["ticker"])
+        self.params = {**self.params, "stop_perte": base}
+        held = {p["ticker"] for p in broker.positions()}
+        for ticker in [t for t in state.get("entries", {}) if t not in held]:
+            del state["entries"][ticker]
+        return sold
+
+    def _guard_one(self, broker, state, now, ticker) -> bool:
+        """guard_positions du présent, limité à un seul placement (pour lui appliquer son propre stop)."""
+        original = broker.positions
+        others = {k: v for k, v in state.get("entries", {}).items() if k != ticker}
+        broker.positions = lambda: [p for p in original() if p["ticker"] == ticker]
+        try:
+            return super().guard_positions(broker, state, now)
+        finally:
+            broker.positions = original
+            state.setdefault("entries", {}).update(others)   # le présent efface les autres placements
 
     def pick_horses(self, state, now: datetime) -> list:
         """Carnet n°1 : un cheval déjà détenu est gardé tant qu'il reste dans le top `garder_rang`
