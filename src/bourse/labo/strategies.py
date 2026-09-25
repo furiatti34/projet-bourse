@@ -117,7 +117,30 @@ class LabOpportuniste(OpportunisteStrategy):
             return
         super().hunt_sales(broker, state)
 
+    def _trailing(self, broker, state) -> None:
+        """Carnet n°20 : `stop_suiveur` → une occasion montée à +4 % est revendue si elle revient à zéro
+        (on ne laisse pas un gain se transformer en perte)."""
+        for trade in list(state.get("trades", [])):
+            order = broker.order(trade["order_id"])
+            if order["status"] != FILLED:
+                continue
+            asset = self.view.asset(trade["ticker"]) if self.view else None
+            if asset is None:
+                continue
+            change = asset.price / order["fill_price"] - 1
+            trade["pic"] = max(trade.get("pic", 0.0), change)
+            if trade["pic"] >= 0.04 and change <= 0:
+                broker.place_order(trade["ticker"], SELL, quantity=order["filled_qty"],
+                                   reason=f"Revente {trade['ticker']} : gain de {trade['pic']:+.1%} revenu à zéro")
+                self.note(f"Revente de {trade['ticker']} : le gain de {trade['pic']:+.1%} est revenu à zéro.")
+                state["trades"].remove(trade)
+
     def manage_trades(self, broker, state) -> None:
+        if self.params.get("stop_suiveur"):
+            self._trailing(broker, state)
+        self._manage_trades_rsi(broker, state)
+
+    def _manage_trades_rsi(self, broker, state) -> None:
         """Carnet n°9 : une occasion est revendue dès que le rebond est fait (RSI revenu au-dessus de
         `sortie_rsi`), au lieu d'attendre l'objectif, le stop-loss ou la durée maximale."""
         level = self.params.get("sortie_rsi")
@@ -192,11 +215,12 @@ class LabAudacieux(AudacieuxStrategy):
         self.think(f"Marché d'accompagnement : {best.label} (élan {best.momentum:+.1f}"
                    + (", gardé car encore dans le haut du classement)" if current and best is not ranked[0] else ")"))
         attack = p["titre_attaque"]
+        share = float(p.get("neutre_part_attaque", 0.50))   # carnet n°21 : moins de levier en posture neutre
         nasdaq = self.view.asset(NASDAQ)
         if p.get("neutre_sans_levier_si_baisse") and nasdaq is not None and not nasdaq.above_ma50:
             attack = NASDAQ   # carnet n°14 : Nasdaq ×1 au lieu de ×2 quand il est sous sa moyenne 50 jours
             self.think("Le Nasdaq est sous sa moyenne 50 jours : ma moitié Nasdaq passe sans levier.")
-        return {attack: 0.50, best.ticker: round(full - 0.50, 3)}
+        return {attack: share, best.ticker: round(full - share, 3)}
 
 
 class LabKamikaze(KamikazeStrategy):
@@ -239,8 +263,11 @@ class LabKamikaze(KamikazeStrategy):
         keep_rank = int(p.get("garder_rang", 2))
         # Carnet n°7 : `exiger_tendance` → seulement des placements au-dessus de leur moyenne 50 jours
         trend = bool(p.get("exiger_tendance"))
+        # Carnet n°22 : `baisse_si_tempete` → paris à la baisse seulement quand le climat est à la tempête
+        no_short = bool(p.get("baisse_si_tempete")) and view.risk_score > -30
         ranked = sorted((a for a in view.pick(families=FAMILIES, exclude=set(state.get("banned", {})))
-                         if a.sprint > 0 and a.ret_5d > 0 and (not trend or a.above_ma50)), key=lambda a: -a.sprint)
+                         if a.sprint > 0 and a.ret_5d > 0 and (not trend or a.above_ma50)
+                         and not (no_short and a.leverage < 0)), key=lambda a: -a.sprint)
         self.think("Ce qui monte le plus vite : " + ", ".join(
             f"{a.name} ({a.sprint:+.1f})" for a in ranked[:4]) if ranked else "Rien ne monte en ce moment.")
         if not ranked:
