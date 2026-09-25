@@ -76,8 +76,11 @@ ECO_GAPS = [
      "l'avoir publié, Éco lit la version corrigée. C'est rare et limité à des retouches."),
     ("Robot Éco : l'IA est attendue",
      "Au présent, si l'IA ne répond pas (Ollama fermé), Éco passe son tour. Dans le passé, la simulation "
-     "l'attend : on juge ses décisions, pas les pannes du PC. Le hasard de l'IA est fixé (au présent aussi) : "
-     "une simulation relancée à l'identique redonne les mêmes décisions."),
+     "l'attend : on juge ses décisions, pas les pannes du PC. Comme au présent, une réponse inutilisable de l'IA "
+     "(emballée ou illisible, c'est rare) = Éco garde ses positions et réessaie au passage suivant ; c'est noté "
+     "dans son journal. Le hasard de l'IA est fixé (au présent aussi), mais l'IA peut répondre un tout petit peu "
+     "différemment quand elle traite deux demandes à la fois (par exemple le Robot Éco du présent en même "
+     "temps) : une simulation relancée ne redonne donc pas toujours exactement les mêmes décisions."),
 ]
 
 

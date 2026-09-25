@@ -442,7 +442,7 @@ def run(path: Path) -> None:
         set_info(conn, **values)
 
     from bourse.strategies.eco import EcoStrategy
-    EcoStrategy.on_wait = lambda text: status(message=text)
+    EcoStrategy.on_wait = staticmethod(lambda text: status(message=text))
     for p in settings["paper_trading"]["portefeuilles"]:
         if uses_eco(p):   # Éco lit la bibliothèque de la simulation, jamais celle du présent
             p.setdefault("parametres", {})["bibliotheque_db"] = str(path)

@@ -37,7 +37,8 @@ from .base import CASH_BUFFER, Strategy
 log = logging.getLogger(__name__)
 
 OLLAMA = "http://localhost:11434"
-SEED = 42            # hasard de l'IA fixé : une simulation relancée à l'identique redonne les mêmes décisions
+MAX_TOKENS = 2500    # longueur maximale d'une réponse de l'IA
+SEED = 42           # hasard de l'IA fixé : une simulation relancée à l'identique redonne les mêmes décisions
 PARIS = ZoneInfo("Europe/Paris")
 THEMES = ["perspectives marchés actions récession", "inflation taux banques centrales",
           "or dollar refuge", "dette publique obligations"]
@@ -57,6 +58,10 @@ SCHEMA = {"type": "object", "required": ["analyse", "allocation", "raisons", "co
         "ticker": {"type": "string"}, "part": {"type": "number"}}}},
     "raisons": {"type": "array", "items": {"type": "string"}},
     "conviction": {"type": "string", "enum": ["faible", "moyenne", "forte"]}}}
+
+
+class InvalidAnswer(Exception):
+    """L'IA a répondu, mais sa réponse est inutilisable (coupée ou illisible)."""
 
 
 class EcoStrategy(Strategy):
@@ -120,12 +125,13 @@ class EcoStrategy(Strategy):
     def ask_ai(self, dossier: str) -> dict:
         if not clock.is_simulated():
             return self._call_ai(dossier, read_timeout=420)
-        # Simulation : on attend l'IA plutôt que de passer son tour (une panne du PC fausserait le résultat).
-        # Délai généreux : l'IA peut être occupée à répondre au robot Éco du présent en même temps.
+        # Simulation : si Ollama est fermé ou ne répond pas, on l'attend plutôt que de passer son tour (une panne
+        # du PC fausserait le résultat). Délai généreux : l'IA peut être occupée par le Robot Éco du présent.
+        # Une réponse illisible (InvalidAnswer), elle, n'est pas une panne : même traitement qu'au présent.
         for attempt in range(1, 10_000):
             try:
                 return self._call_ai(dossier, read_timeout=1800)
-            except Exception as exc:
+            except requests.RequestException as exc:
                 log.warning("IA du Robot Éco indisponible (essai %d) : %s", attempt, exc)
                 if self.on_wait:
                     self.on_wait(f"En attente de l'IA d'Éco (Ollama est-il lancé ?) — essai {attempt} : {exc}")
@@ -136,10 +142,21 @@ class EcoStrategy(Strategy):
         model = self.params.get("modele", "qwen3:8b")
         resp = requests.post(f"{OLLAMA}/api/chat", timeout=(5, read_timeout), json={
             "model": model, "stream": False, "think": False, "format": SCHEMA, "keep_alive": "30m",
-            "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED},
+            # num_predict : une réponse normale fait ~1 000 jetons ; au-delà, l'IA s'emballe (elle peut sinon
+            # écrire jusqu'à remplir sa mémoire, ~30 min pour une réponse inutilisable)
+            "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED, "num_predict": MAX_TOKENS},
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": dossier}]})
         resp.raise_for_status()
-        return json.loads(resp.json()["message"]["content"])
+        body = resp.json()
+        if body.get("done_reason") == "length":
+            raise InvalidAnswer(f"réponse coupée au bout de {MAX_TOKENS} jetons (l'IA s'est emballée)")
+        try:
+            decision = json.loads(body["message"]["content"])
+        except (KeyError, ValueError) as exc:
+            raise InvalidAnswer(f"réponse illisible ({exc})") from exc
+        if not isinstance(decision, dict):
+            raise InvalidAnswer("réponse illisible (pas un objet JSON)")
+        return decision
 
     def safe_targets(self, decision: dict) -> dict[str, float]:
         """Applique les garde-fous à la répartition proposée par l'IA."""
@@ -201,6 +218,12 @@ class EcoStrategy(Strategy):
             return
         try:
             decision = self.ask_ai(self.dossier(broker, state))
+        except InvalidAnswer as exc:
+            # pas de nouvel essai immédiat : au prochain passage (15 min), le dossier aura changé
+            log.warning("Réponse inutilisable de l'IA du Robot Éco : %s", exc)
+            self.note(f"⚠️ Mon IA a donné une réponse inutilisable ({exc}) : je garde mes positions et je "
+                      "réessaie au prochain passage.")
+            return
         except Exception as exc:
             log.warning("IA du Robot Éco indisponible : %s", exc)
             self.think(f"⚠️ Mon IA ne répond pas (Ollama est-il lancé ?) : je garde mes positions. ({exc})")
