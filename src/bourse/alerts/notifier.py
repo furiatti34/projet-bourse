@@ -7,10 +7,14 @@ dans le centre de notifications.
 """
 import logging
 import sys
-import winreg
 from datetime import datetime
 
-from windows_toasts import Toast, WindowsToaster
+try:
+    import winreg
+
+    from windows_toasts import Toast, WindowsToaster
+except ImportError:   # site en ligne (Linux) : pas de notifications Windows, notify() renvoie False
+    pass
 
 from bourse.config import PROJECT_ROOT
 
