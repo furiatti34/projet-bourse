@@ -7,6 +7,8 @@ from datetime import datetime, timedelta
 
 from bourse import clock
 from bourse.strategies.audacieux import ATTACK, BEAR, NASDAQ, NEUTRAL, AudacieuxStrategy
+from bourse.execution.broker import SELL
+from bourse.execution.paper_broker import FILLED
 from bourse.strategies.base import CASH_BUFFER
 from bourse.strategies.kamikaze import FAMILIES, KamikazeStrategy
 from bourse.strategies.opportuniste import OpportunisteStrategy
@@ -40,6 +42,18 @@ class LabPrudent(PrudentStrategy):
             self.view = _ScoreOverride(self.view, smooth)
         super().on_cycle(broker, state)
 
+    def targets(self, state: dict) -> dict[str, float]:
+        """Carnet n°8 : obligations seulement si leur cours est au-dessus de sa moyenne 200 jours
+        (`obligations_tendance`) ; sinon cette part va au placement sans risque."""
+        targets = super().targets(state)
+        p = self.params
+        bonds = self.view.asset(p["titre_obligations"])
+        if p.get("obligations_tendance") and bonds is not None and not bonds.above_ma200:
+            share = targets.pop(p["titre_obligations"], 0)
+            targets[p["titre_monetaire"]] = round(targets.get(p["titre_monetaire"], 0) + share, 3)
+            self.think("Les obligations sont sous leur moyenne 200 jours : je les remplace par le placement sans risque.")
+        return targets
+
 
 class LabOpportuniste(OpportunisteStrategy):
     name = "labo_opportuniste"
@@ -59,6 +73,22 @@ class LabOpportuniste(OpportunisteStrategy):
             return base
         free = 1 - CASH_BUFFER - self.params["mise_par_occasion"] - getattr(self, "_occupied", 0.0)
         return round(max(base, free), 3)
+
+    def manage_trades(self, broker, state) -> None:
+        """Carnet n°9 : une occasion est revendue dès que le rebond est fait (RSI revenu au-dessus de
+        `sortie_rsi`), au lieu d'attendre l'objectif, le stop-loss ou la durée maximale."""
+        level = self.params.get("sortie_rsi")
+        if level and self.view is not None:
+            for trade in list(state.get("trades", [])):
+                order = broker.order(trade["order_id"])
+                asset = self.view.asset(trade["ticker"])
+                if order["status"] != FILLED or asset is None or asset.rsi < level:
+                    continue
+                broker.place_order(trade["ticker"], SELL, quantity=order["filled_qty"],
+                                   reason=f"Revente {trade['ticker']} : rebond fait (RSI {asset.rsi:.0f})")
+                self.note(f"Revente de {trade['ticker']} : rebond fait (RSI {asset.rsi:.0f}).")
+                state["trades"].remove(trade)
+        super().manage_trades(broker, state)
 
 
 class LabAudacieux(AudacieuxStrategy):
@@ -89,6 +119,12 @@ class LabAudacieux(AudacieuxStrategy):
             if current == BEAR and risk <= p["seuil_defense"] + margin and world and world.value < 0:
                 self.think(f"Note {risk:+d} un peu au-dessus du seuil de défense, mais dans la marge : je reste en baisse.")
                 return BEAR
+        # Carnet n°10 : pas d'attaque au levier quand la peur est forte (VIX au-dessus de `attaque_vix_max`)
+        vix_max = self.params.get("attaque_vix_max")
+        fear = self.view.factor("Peur (VIX)")
+        if mode == ATTACK and vix_max and fear is not None and fear.value < (20 - vix_max) / 10:
+            self.think(f"Peur trop forte ({fear.detail}) : pas d'attaque au levier.")
+            return NEUTRAL
         return mode
 
     def targets(self, mode: str) -> dict[str, float]:
