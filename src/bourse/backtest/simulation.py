@@ -50,7 +50,7 @@ STEP = timedelta(minutes=15)
 ROBOTS_ALLOWED = ("prudent", "opportuniste", "audacieux", "kamikaze", "eco")
 # Le Robot Éco ne remonte pas avant la sortie de son IA (qwen3, 29/04/2025) : elle connaîtrait la suite.
 ECO_DEBUT = date(2025, 5, 1)
-ECO_SECONDES_PAR_REFLEXION = 110   # mesuré sur ce PC (qwen3:8b) : sert à estimer la durée
+ECO_MINUTES_PAR_JOUR = 6   # mesuré sur ce PC (qwen3:8b, ~2 min par réflexion) : sert à estimer la durée
 LIBRARY_DB = PROJECT_ROOT / "data" / "bourse.db"   # bibliothèque d'Éco 1 du présent (lue, jamais modifiée)
 
 INFO_SCHEMA = "CREATE TABLE IF NOT EXISTS simulation (cle TEXT PRIMARY KEY, valeur TEXT)"
@@ -114,29 +114,39 @@ def uses_eco(portfolio_cfg: dict) -> bool:
 
 
 def estimated_minutes(start: date, end: date, with_eco: bool) -> float:
-    """Durée de calcul estimée. Sans Éco : ~1,5 min par année. Avec Éco : une réflexion de l'IA toutes les
-    4 h simulées (6 par jour, week-ends compris, comme au présent), plus ~15 % après les alertes fortes."""
+    """Durée de calcul estimée. Sans Éco : ~1,5 min par année. Avec Éco : ~6 min par jour simulé (son IA
+    réfléchit toutes les 4 h, sauf quand des ordres attendent l'ouverture de la Bourse, comme au présent)."""
     days = max((end - start).days, 1)
     minutes = days / 365 * 1.5
     if with_eco:
-        minutes += days * 6 * 1.15 * ECO_SECONDES_PAR_REFLEXION / 60
+        minutes += days * ECO_MINUTES_PAR_JOUR
     return minutes
 
 
-def launch(path: Path) -> None:
-    """Lance la simulation dans un programme séparé (l'interface reste libre)."""
+def launch(path: Path) -> int:
+    """Lance la simulation dans un programme séparé (l'interface reste libre). Son numéro de programme est noté
+    tout de suite dans la simulation : une relance automatique ne la démarre donc jamais en double."""
     import os
     import subprocess
     python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
     log_file = open(path.with_suffix(".log"), "a", encoding="utf-8")
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-    subprocess.Popen([str(python if python.exists() else sys.executable), "-m", "bourse.backtest.simulation",
+    proc = subprocess.Popen([str(python if python.exists() else sys.executable), "-m", "bourse.backtest.simulation",
                       str(path)], cwd=PROJECT_ROOT, stdout=log_file, stderr=subprocess.STDOUT,
                      stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
                      # PYTHONHASHSEED fixé : même ordre de parcours des ensembles d'un lancement à l'autre, donc
                      # une simulation relancée à l'identique passe ses ordres dans le même ordre
                      env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src"), "PYTHONIOENCODING": "utf-8",
                           "PYTHONHASHSEED": "0"})
+    conn = open_sim(path)
+    set_info(conn, pid=proc.pid)
+    conn.close()
+    # surveille le retour devant le PC pour y afficher l'avancement (une seule copie tourne à la fois)
+    watcher = PROJECT_ROOT / "scripts" / "surveille_retour.pyw"
+    pythonw = PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"
+    if sys.platform == "win32" and watcher.exists() and pythonw.exists():
+        subprocess.Popen([str(pythonw), str(watcher)], cwd=PROJECT_ROOT, creationflags=flags, close_fds=True)
+    return proc.pid
 
 
 def list_simulations() -> list[tuple[Path, dict]]:
@@ -309,11 +319,62 @@ def resume_orphans() -> list[str]:
         if status == "arret_demande":
             set_info(conn, statut="arretee", message="Arrêtée à la demande")
         else:
-            set_info(conn, pid=None, message="Reprise après une interruption…")
+            set_info(conn, message="Reprise après une interruption…")
             launch(path)
             relaunched.append(path.name)
         conn.close()
     return relaunched
+
+
+MOIS = ["janvier", "février", "mars", "avril", "mai", "juin", "juillet", "août", "septembre", "octobre",
+        "novembre", "décembre"]
+
+
+def _human(minutes: float) -> str:
+    if minutes < 90:
+        return f"{max(1, round(minutes))} min"
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.0f} h"
+    return f"{minutes / 60 / 24:.1f} jours".replace(".", ",")
+
+
+def status_lines() -> list[str]:
+    """Où en sont les simulations : lignes pour la notification Windows (démarrage, réveil, retour au PC).
+    Une simulation terminée est annoncée une seule fois, avec le robot en tête."""
+    lines = []
+    for path, info in list_simulations():
+        status = info.get("statut")
+        span = f"{date.fromisoformat(info['debut']):%d/%m/%Y} → {date.fromisoformat(info['fin']):%d/%m/%Y}"
+        if status in ("preparation", "en_cours", "en_attente"):
+            p = float(info.get("progression") or 0)
+            t = datetime.fromisoformat(info["heure_simulee"]) if info.get("heure_simulee") else None
+            where = f"nous sommes le {t.day} {MOIS[t.month - 1]} {t.year}" if t else "préparation"
+            spent = float(info.get("duree_s") or 0) / 60
+            left = f" · reste ≈ {_human(spent * (1 - p) / p)} si le PC reste allumé" if 0.002 < p < 1 else ""
+            lines.append(f"▶️ Simulation {span} : {where} · {p:.0%}{left}")
+        elif status == "terminee" and not info.get("fin_annoncee"):
+            conn = open_sim(path)
+            try:
+                best = conn.execute(
+                    "SELECT p.name, s.value_eur / p.initial_cash - 1 AS perf FROM portfolios p JOIN snapshots s"
+                    " ON s.portfolio_id = p.id WHERE s.rowid = (SELECT MAX(rowid) FROM snapshots WHERE portfolio_id = p.id)"
+                    " ORDER BY perf DESC LIMIT 1").fetchone()
+                lead = f" · en tête : {best[0]} ({best[1] * 100:+.1f} %)" if best else ""
+                lines.append(f"✅ Simulation {span} terminée{lead}")
+                set_info(conn, fin_annoncee=True)
+            finally:
+                conn.close()
+        elif status == "erreur" and not info.get("fin_annoncee"):
+            lines.append(f"⚠️ Simulation {span} : erreur ({info.get('message', '')[:80]})")
+            conn = open_sim(path)
+            set_info(conn, fin_annoncee=True)
+            conn.close()
+    return lines
+
+
+def any_running() -> bool:
+    return any(info.get("statut") in ("en_attente", "preparation", "en_cours", "arret_demande")
+               for _, info in list_simulations())
 
 
 def _keep_awake() -> None:
@@ -363,7 +424,16 @@ def run(path: Path) -> None:
     # Reprise au quart d'heure près : seulement avec Éco (sans lui, une simulation dure quelques minutes et
     # recommence simplement du début).
     resume_from = datetime.fromisoformat(info["dernier_pas"]) if has_eco and info.get("dernier_pas") else None
-    t_begin = time.monotonic() - float(info.get("duree_s") or 0)
+    timing = {"total": float(info.get("duree_s") or 0), "last": time.monotonic()}
+
+    def worked() -> float:
+        """Temps de calcul cumulé (reprises comprises). Un trou de plus d'une heure = PC en veille : non compté,
+        pour que le temps restant affiché soit celui d'un PC allumé."""
+        now_m = time.monotonic()
+        delta, timing["last"] = now_m - timing["last"], now_m
+        if delta < 3600:
+            timing["total"] += delta
+        return timing["total"]
     ecarts: list[str] = list(info.get("ecarts") or []) if resume_from else []
     set_info(conn, pid=os.getpid())
     _keep_awake()
@@ -477,12 +547,18 @@ def run(path: Path) -> None:
             stop = conn.execute("SELECT valeur FROM simulation WHERE cle = 'statut'").fetchone()
             if stop and json.loads(stop[0]) == "arret_demande":
                 status(statut="arretee", message=f"Arrêtée à la demande le {t:%d/%m/%Y}", heure_simulee=t.isoformat(),
-                       duree_s=time.monotonic() - t_begin, dernier_pas=t.isoformat())
+                       duree_s=worked(), dernier_pas=t.isoformat())
                 return
             status(progression=(i + 1) / len(all_steps), heure_simulee=t.isoformat(), alertes=n_alerts,
-                   duree_s=time.monotonic() - t_begin, dernier_pas=t.isoformat(), message="Les robots sont au travail")
+                   duree_s=worked(), dernier_pas=t.isoformat(), message="Les robots sont au travail")
     status(statut="terminee", progression=1.0, message="Simulation terminée", heure_simulee=end.isoformat(),
-           alertes=n_alerts, duree_s=time.monotonic() - t_begin)
+           alertes=n_alerts, duree_s=worked())
+    if has_eco:   # simulation longue : on prévient qu'elle est finie
+        try:
+            from bourse.alerts.notifier import notify
+            notify(["🧠 Projet Bourse · le passé", *status_lines()])
+        except Exception:
+            log.exception("Notification de fin impossible")
 
 
 def _save_articles(conn, articles) -> None:
