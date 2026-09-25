@@ -2,6 +2,7 @@
 # Chaque ligne renvoie à une entrée du carnet (data/labo/carnet.md).
 prudent:
   lissage_jours: 5      # carnet n°4 : note de climat moyenne sur 5 jours
+  actions_min: 0.45     # carnet n°28 : au moins 45 % d'actions même par tempête (35 % au présent)
   actions_max: 0.85     # carnet n°24 : jusqu'à 85 % d'actions par beau temps (75 % au présent)
 opportuniste:
   reserve_une_mise: true   # carnet n°5 : hors tempête, une seule mise gardée en liquide
