@@ -1,0 +1,126 @@
+/* Volet des alertes (voir panneau_alertes.html pour le script). Même verre sombre que la barre des graphiques. */
+
+/* bouton des alertes, en haut à droite : un globe futuriste bicolore, sans cadre autour */
+.alert-bell { all: unset; box-sizing: border-box; position: relative; width: 52px; height: 52px;
+  display: inline-flex; align-items: center; justify-content: center; cursor: pointer; transition: transform .2s ease; }
+.alert-bell:hover { transform: scale(1.08); }
+.alert-bell:active { transform: scale(.95); }
+.alert-bell:focus-visible { outline: 2px solid #3987e5; outline-offset: 2px; border-radius: 12px; }
+.alert-bell svg.globe { width: 46px; height: 46px; overflow: visible; fill: none; stroke-linecap: round;
+  filter: drop-shadow(0 0 5px rgba(57, 135, 229, .65)); transition: filter .25s ease; }
+.globe .gl-core { fill: rgba(57, 135, 229, .14); stroke: none; }
+.globe .gl-a { stroke: #4ea1ff; stroke-width: 1.7; }
+.globe .gl-b { stroke: #ffffff; stroke-width: 1.2; opacity: .88; }
+.globe .gl-orbit { stroke-width: 1.1; stroke-dasharray: 2.4 2.2; opacity: .85; }
+.globe .gl-sat { fill: #ffffff; stroke: none; }
+.globe .gl-mer { transform-box: fill-box; transform-origin: center; }
+/* au survol : le globe tourne sur lui-même et s'illumine */
+.alert-bell:hover svg.globe, .alert-bell.open svg.globe { filter: drop-shadow(0 0 9px rgba(78, 161, 255, .95)); }
+.alert-bell:hover .gl-mer, .alert-bell.open .gl-mer { animation: globe-spin 2.4s linear infinite; }
+@keyframes globe-spin { 0% { transform: scaleX(1); } 50% { transform: scaleX(-1); } 100% { transform: scaleX(1); } }
+.alert-bell.open .gl-a { stroke: #ffffff; }
+.alert-bell.open .gl-b { stroke: #4ea1ff; opacity: 1; }
+/* alertes jamais vues : le globe « respire » */
+.alert-bell.has-new svg.globe { animation: globe-glow 2.2s ease-in-out infinite; }
+@keyframes globe-glow { 50% { filter: drop-shadow(0 0 12px rgba(78, 161, 255, 1)); } }
+@media (prefers-reduced-motion: reduce) { .alert-bell .gl-mer, .alert-bell svg.globe { animation: none !important; } }
+.alert-badge { position: absolute; top: -6px; right: -8px; min-width: 19px; height: 19px; padding: 0 5px;
+  border-radius: 999px; background: #ff453a; color: #fff; font: 600 11px/19px Inter, sans-serif; text-align: center;
+  box-shadow: 0 0 0 2px #030814; }
+.alert-badge[hidden] { display: none; }
+/* la colonne de la cloche : bouton calé à droite */
+[class*="st-key-bellcol"] { align-items: flex-end; }
+[class*="st-key-bellcol"] [data-testid="stHtml"] { display: flex; justify-content: flex-end; line-height: 0; }
+
+/* voile sombre derrière le volet */
+.ap-veil { position: fixed; inset: 0; z-index: 999980; background: rgba(1, 4, 12, .42);
+  backdrop-filter: blur(2px); opacity: 0; pointer-events: none; transition: opacity .3s ease; }
+.ap-veil.show { opacity: 1; pointer-events: auto; }
+
+/* le volet : un tiers de l'écran, sort par la droite */
+.ap-drawer { position: fixed; top: 0; right: 0; bottom: 0; z-index: 999990;
+  width: max(33.34vw, 380px); max-width: 100vw; display: flex; flex-direction: column;
+  background: rgba(6, 13, 30, .9); border-left: 1px solid rgba(140, 185, 255, .14);
+  backdrop-filter: blur(24px) saturate(120%); box-shadow: -30px 0 80px rgba(0, 0, 0, .55);
+  transform: translateX(104%); transition: transform .42s cubic-bezier(.2, .9, .25, 1);
+  font-family: Inter, system-ui, sans-serif; color: #fff; }
+.ap-drawer.show { transform: translateX(0); }
+
+.ap-head { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 22px 22px 14px; border-bottom: 1px solid rgba(140, 185, 255, .08); }
+.ap-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -0.03em; }
+.ap-sub { color: #8e8e93; font-size: .8rem; margin-top: 2px; }
+.ap-close { all: unset; box-sizing: border-box; width: 36px; height: 36px; border-radius: 50%; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; color: #c3c2b7;
+  background: rgba(255, 255, 255, .05); border: 1px solid rgba(140, 185, 255, .12); transition: background .15s, color .15s; }
+.ap-close:hover { background: rgba(255, 255, 255, .1); color: #fff; }
+.ap-close:focus-visible { outline: 2px solid #3987e5; outline-offset: 2px; }
+.ap-close svg, .ap-open svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
+  stroke-linecap: round; stroke-linejoin: round; }
+
+.ap-list { flex: 1; overflow-y: auto; padding: 16px 18px 28px; display: flex; flex-direction: column; gap: 12px;
+  scrollbar-width: thin; scrollbar-color: rgba(140, 185, 255, .2) transparent; }
+.ap-empty { color: #8e8e93; padding: 40px 8px; text-align: center; }
+
+/* un gros titre = un grand bloc cliquable */
+.ap-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 18px 18px 16px;
+  border-radius: 18px; text-decoration: none !important; color: #fff !important; overflow: hidden;
+  background: linear-gradient(160deg, rgba(30, 55, 105, .38), rgba(8, 16, 36, .55) 60%);
+  border: 1px solid rgba(140, 185, 255, .11);
+  box-shadow: inset 0 1px 0 rgba(180, 215, 255, .06);
+  opacity: 0; transform: translateX(24px);
+  transition: border-color .2s, background .2s, transform .2s ease; }
+.ap-drawer.show .ap-card { animation: ap-in .45s cubic-bezier(.2, .9, .25, 1) forwards; }
+@keyframes ap-in { to { opacity: 1; transform: translateX(0); } }
+.ap-card:hover { border-color: rgba(140, 185, 255, .3); transform: translateX(-3px);
+  background: linear-gradient(160deg, rgba(45, 80, 145, .45), rgba(10, 20, 44, .6) 60%); }
+.ap-card:focus-visible { outline: 2px solid #3987e5; outline-offset: 2px; }
+
+/* fine jauge d'importance en haut du bloc (note sur 100) */
+.ap-meter { position: absolute; top: 0; left: 0; height: 2px; border-radius: 0 2px 2px 0; }
+.ap-card.forte .ap-meter { background: #ff453a; box-shadow: 0 0 12px rgba(255, 69, 58, .7); }
+.ap-card.imp .ap-meter { background: #ffb340; box-shadow: 0 0 12px rgba(255, 179, 64, .55); }
+
+.ap-top { display: flex; align-items: center; gap: 8px; font-size: .78rem; color: #8e8e93; }
+.ap-chip { font-weight: 600; font-size: .7rem; letter-spacing: .06em; text-transform: uppercase;
+  padding: 3px 9px; border-radius: 999px; }
+.ap-card.forte .ap-chip { background: rgba(255, 69, 58, .16); color: #ff6b61; }
+.ap-card.imp .ap-chip { background: rgba(255, 179, 64, .14); color: #ffb340; }
+.ap-score { color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ap-new { width: 7px; height: 7px; border-radius: 50%; background: #3987e5; box-shadow: 0 0 10px #3987e5; margin-left: auto; }
+.ap-headline { font-size: 1.08rem; font-weight: 600; line-height: 1.35; letter-spacing: -0.01em; text-wrap: balance; }
+.ap-why { color: #aab3c5; font-size: .8rem; line-height: 1.45; }
+.ap-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: .78rem; color: #8e8e93; }
+.ap-open { display: inline-flex; align-items: center; gap: 5px; color: #fff; font-weight: 500; white-space: nowrap;
+  transition: transform .2s; }
+.ap-card:hover .ap-open { transform: translate(2px, -2px); }
+
+@media (max-width: 640px) { .ap-drawer { width: 100vw; } }
+@media (prefers-reduced-motion: reduce) {
+  .ap-drawer, .ap-veil, .ap-card { transition: none; }
+  .ap-drawer.show .ap-card { animation: none; opacity: 1; transform: none; }
+}
+
+/* bouton « Rafraîchir » : mêmes codes que le globe (bicolore, sans cadre) */
+[class*="st-key-refreshbtn"] { display: flex !important; justify-content: flex-end; padding-right: 10px; }
+[class*="st-key-refreshbtn"] .stButton, [class*="st-key-refreshbtn"] .stTooltipIcon { width: auto !important; }
+[class*="st-key-refreshbtn"] button { all: unset !important; box-sizing: border-box !important; width: 52px !important;
+  height: 52px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important;
+  cursor: pointer !important; transition: transform .2s ease !important; }
+[class*="st-key-refreshbtn"] button > :not(svg) { display: none !important; }
+[class*="st-key-refreshbtn"] button:hover { transform: scale(1.08) !important; }
+[class*="st-key-refreshbtn"] button:active { transform: scale(.95) !important; }
+[class*="st-key-refreshbtn"] button:focus-visible { outline: 2px solid #3987e5 !important; outline-offset: 2px !important;
+  border-radius: 12px !important; }
+svg.refresh-icon { width: 44px; height: 44px; overflow: visible; fill: none; stroke-linecap: round; stroke-linejoin: round;
+  filter: drop-shadow(0 0 5px rgba(57, 135, 229, .65)); transition: filter .25s ease, transform .6s cubic-bezier(.2, .9, .25, 1); }
+.refresh-icon .gl-core { fill: rgba(57, 135, 229, .14); stroke: none; }
+.refresh-icon .gl-a { stroke: #4ea1ff; stroke-width: 1.8; }
+.refresh-icon .gl-b { stroke: #ffffff; stroke-width: 1.8; opacity: .92; }
+.refresh-icon .gl-orbit { stroke-width: 1.1; stroke-dasharray: 2.4 2.2; opacity: .85; }
+.refresh-icon .gl-sat { fill: #ffffff; stroke: none; }
+/* au survol : un demi-tour et plus de lumière ; au clic, la rotation est pilotée par panneau_alertes.html */
+[class*="st-key-refreshbtn"] button:hover svg.refresh-icon,
+[class*="st-key-refreshbtn"] button.busy svg.refresh-icon { filter: drop-shadow(0 0 9px rgba(78, 161, 255, .95)); }
+[class*="st-key-refreshbtn"] button:hover svg.refresh-icon { transform: rotate(180deg); }
+@media (prefers-reduced-motion: reduce) { svg.refresh-icon { transition: none; } }

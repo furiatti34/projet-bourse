@@ -1,0 +1,90 @@
+<!-- Bulles d'aide des tableaux en verre (tableaux.py) : double-clic ou clic droit sur une case. -->
+<script>
+// NB : aucune balise écrite en clair dans ce script (le filtre DOMPurify de Streamlit supprimerait le script).
+(function () {
+  if (window.__glassTables) return;
+  window.__glassTables = true;
+  const CELL = "table.gt td, table.gt th";
+  let bubble = null, anchor = null;
+
+  function close() {
+    if (bubble) { bubble.remove(); bubble = null; }
+    if (anchor) { anchor.classList.remove("gt-on"); anchor = null; }
+  }
+  function para(cls, text) {
+    const p = document.createElement("div");
+    p.className = cls; p.textContent = text;
+    return p;
+  }
+  function place(cell) {
+    const r = cell.getBoundingClientRect(), b = bubble.getBoundingClientRect(), m = 10;
+    const W = document.documentElement.clientWidth, H = window.innerHeight;
+    let left = r.right + m, top = r.top + r.height / 2 - b.height / 2, side = "right";
+    if (left + b.width > W - m) { left = r.left - m - b.width; side = "left"; }
+    if (left < m) {                                        // pas la place sur les côtés : en dessous
+      left = Math.min(Math.max(m, r.left + r.width / 2 - b.width / 2), W - b.width - m);
+      top = r.bottom + m; side = "below";
+      if (top + b.height > H - m) { top = r.top - m - b.height; side = "above"; }
+    }
+    top = Math.min(Math.max(m, top), H - b.height - m);
+    bubble.style.left = left + "px"; bubble.style.top = top + "px";
+    bubble.dataset.side = side;
+  }
+  function open(cell) {
+    close();
+    const table = cell.closest("table.gt");
+    const th = table.tHead.rows[0].cells[cell.cellIndex];
+    const col = th ? th.textContent.trim() : "";
+    const head = cell.tagName === "TH";
+    const label = head ? "" : cell.parentElement.dataset.label;
+    bubble = document.createElement("div");
+    bubble.className = "gt-bubble"; bubble.setAttribute("role", "dialog");
+    bubble.appendChild(para("gt-b-title", label ? label + " · " + col : col));
+    if (!head && cell.dataset.help) cell.dataset.help.split("\n").forEach((t) => bubble.appendChild(para("gt-b-body", t)));
+    if (th && th.dataset.help) bubble.appendChild(para(head || !cell.dataset.help ? "gt-b-body" : "gt-b-col", th.dataset.help));
+    document.body.appendChild(bubble);
+    anchor = cell; cell.classList.add("gt-on");
+    place(cell);
+  }
+  function sortBy(th) {
+    const table = th.closest("table.gt"), i = th.cellIndex, body = table.tBodies[0];
+    const dir = th.dataset.dir === "desc" ? "asc" : "desc";
+    table.querySelectorAll("thead th").forEach((h) => delete h.dataset.dir);
+    th.dataset.dir = dir;
+    const key = (tr) => { const v = tr.cells[i].dataset.sort; const n = parseFloat(v); return isNaN(n) ? v : n; };
+    const rows = Array.from(body.rows).sort((a, b) => {
+      const x = key(a), y = key(b);
+      const c = typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), "fr");
+      return dir === "asc" ? c : -c;
+    });
+    rows.forEach((tr) => body.appendChild(tr));
+  }
+
+  let sortTimer = null;   // un clic sur un titre trie, mais on attend de savoir si c'est un double-clic
+  document.addEventListener("dblclick", (e) => {
+    const cell = e.target.closest && e.target.closest(CELL);
+    if (!cell) return;
+    e.preventDefault();
+    clearTimeout(sortTimer);
+    const sel = window.getSelection(); if (sel) sel.removeAllRanges();   // pas de mot surligné
+    open(cell);
+  });
+  document.addEventListener("contextmenu", (e) => {               // clic droit / clic à deux doigts
+    const cell = e.target.closest && e.target.closest(CELL);
+    if (!cell) return;
+    e.preventDefault();
+    open(cell);
+  });
+  document.addEventListener("click", (e) => {
+    const th = e.target.closest && e.target.closest("table.gt th");
+    if (!th || e.detail !== 1) return;
+    clearTimeout(sortTimer);
+    sortTimer = setTimeout(() => sortBy(th), 260);
+  });
+  // un clic n'importe où hors de la bulle la ferme
+  document.addEventListener("pointerdown", (e) => { if (bubble && !bubble.contains(e.target)) close(); }, true);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") close(); });
+  window.addEventListener("resize", close);
+  document.addEventListener("scroll", () => { if (bubble && anchor) place(anchor); }, true);
+})();
+</script>

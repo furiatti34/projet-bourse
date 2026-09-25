@@ -1,0 +1,134 @@
+<!-- Barre d'outils des graphiques, en verre : elle sort de derrière le graphique au survol.
+     Elle pilote la barre de Plotly (cachée) et ouvre le panneau « Réglages » (chart_tools.py). -->
+<script>
+// NB : aucune balise écrite en clair dans ce script (« \x3c » à la place du chevron ouvrant) : le filtre de
+// sécurité de Streamlit (DOMPurify) supprime un script dont le texte contient des balises HTML.
+(function () {
+  if (window.__chartTools) { window.__chartTools(); return; }
+
+  const ICONS = {
+    zoom: '\x3csvg viewBox="0 0 24 24">\x3ccircle cx="10.5" cy="10.5" r="6"/>\x3cpath d="M15 15l5 5M8 10.5h5M10.5 8v5"/>\x3c/svg>',
+    pan: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l-2.5 2.5"/>\x3c/svg>',
+    in: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M12 5v14M5 12h14"/>\x3c/svg>',
+    out: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M5 12h14"/>\x3c/svg>',
+    auto: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>\x3c/svg>',
+    reset: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4.5h4.5"/>\x3c/svg>',
+    photo: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M4 8h3l1.5-2h7L17 8h3v11H4z"/>\x3ccircle cx="12" cy="13" r="3.2"/>\x3c/svg>',
+    full: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M9 4H4v5M15 4h5v5M9 20H4v-5M15 20h5v-5"/>\x3c/svg>',
+    tune: '\x3csvg viewBox="0 0 24 24">\x3cpath d="M4 7h10M18 7h2M4 17h4M12 17h8"/>\x3ccircle cx="16" cy="7" r="2"/>\x3ccircle cx="10" cy="17" r="2"/>\x3c/svg>',
+  };
+  const TOOLS = [
+    // Boutons de la barre Plotly (cachée) : des « button.modebar-btn » depuis Plotly 3
+    ["zoom", "Zoom : tracez un rectangle", '.modebar-btn[data-attr="dragmode"][data-val="zoom"]'],
+    ["pan", "Déplacer le graphique", '.modebar-btn[data-attr="dragmode"][data-val="pan"]'],
+    "sep",
+    ["in", "Zoomer", '.modebar-btn[data-attr="zoom"][data-val="in"]'],
+    ["out", "Dézoomer", '.modebar-btn[data-attr="zoom"][data-val="out"]'],
+    ["auto", "Recadrer sur les données", '.modebar-btn[data-attr="zoom"][data-val="auto"]'],
+    ["reset", "Revenir à la vue d'origine", '.modebar-btn[data-attr="zoom"][data-val="reset"]'],
+    "sep",
+    ["photo", "Enregistrer en image (PNG)", "photo"],
+    ["full", "Plein écran (Échap pour sortir)", "full"],
+  ];
+
+  function clickModebar(box, selector) {
+    const gd = box.querySelector(".js-plotly-plot");
+    if (!gd) return;
+    if (selector === "photo" && window.Plotly && window.Plotly.downloadImage) {
+      window.Plotly.downloadImage(gd, { format: "png", filename: "projet-bourse", scale: 2 });
+      return;
+    }
+    const target = selector === "photo"
+      ? gd.querySelector('.modebar-btn[data-title*="PNG" i], .modebar-btn:not([data-attr])')
+      : gd.querySelector(selector);
+    if (target) target.click();
+    setTimeout(() => refresh(box), 50);
+  }
+
+  // Plein écran maison : le conteneur (graphique + barre) passe en plein écran, et un bouton
+  // Streamlit caché fait redessiner le graphique en grand par Python ; l'inverse en sortant.
+  let fullBox = null;
+  function toggleBig(box) {
+    const hidden = box.querySelector('[class*="st-key-fullbtn"] button');
+    if (hidden) hidden.click();
+  }
+  function isBig(box) {
+    const gd = box.querySelector(".js-plotly-plot");
+    return !!(gd && gd._fullLayout && gd._fullLayout.height >= 700);
+  }
+  function fullscreen(box) {
+    if (document.fullscreenElement) { document.exitFullscreen(); return; }
+    if (!box.requestFullscreen) return;
+    box.requestFullscreen().then(() => {
+      fullBox = box;
+      if (!isBig(box)) toggleBig(box);
+    }).catch(() => {});
+  }
+  document.addEventListener("fullscreenchange", () => {
+    if (!document.fullscreenElement && fullBox) {
+      const box = fullBox;
+      fullBox = null;
+      if (isBig(box)) toggleBig(box);
+    }
+  });
+
+  function refresh(box) {                                   // bouton zoom/déplacer actif
+    const gd = box.querySelector(".js-plotly-plot");
+    const mode = gd && gd._fullLayout ? gd._fullLayout.dragmode : "zoom";
+    box.querySelectorAll(".chart-tools [data-mode]").forEach((b) => b.classList.toggle("on", b.dataset.mode === mode));
+  }
+
+  function build(box) {
+    const bar = document.createElement("div");
+    bar.className = "chart-tools";
+    bar.setAttribute("role", "toolbar");
+    bar.setAttribute("aria-label", "Outils du graphique");
+    for (const tool of TOOLS) {
+      if (tool === "sep") { const s = document.createElement("span"); s.className = "sep"; bar.appendChild(s); continue; }
+      const [icon, tip, selector] = tool;
+      const b = document.createElement("button");
+      b.type = "button"; b.innerHTML = ICONS[icon];
+      b.dataset.tip = tip; b.setAttribute("aria-label", tip);
+      if (icon === "zoom" || icon === "pan") b.dataset.mode = icon;
+      b.addEventListener("click", () => {
+        if (selector === "full") fullscreen(box); else clickModebar(box, selector);
+      });
+      bar.appendChild(b);
+    }
+    const s = document.createElement("button");
+    s.type = "button"; s.className = "settings";
+    s.innerHTML = ICONS.tune + "\x3cspan>Réglages\x3c/span>";
+    s.setAttribute("aria-label", "Réglages du graphique : abscisse, ordonnée, affichage");
+    s.addEventListener("click", () => {
+      const trigger = box.querySelector('[data-testid="stPopover"] button');
+      if (!trigger) return;
+      // le panneau ne peut pas s'afficher par-dessus le plein écran : on en sort d'abord
+      if (document.fullscreenElement) document.exitFullscreen().then(() => setTimeout(() => trigger.click(), 150));
+      else trigger.click();
+    });
+    bar.appendChild(s);
+    box.appendChild(bar);
+    box.addEventListener("mouseenter", () => refresh(box));
+    refresh(box);
+  }
+
+  function decorate() {
+    document.querySelectorAll('[class*="st-key-chartbox"]').forEach((box) => {
+      if (!box.querySelector(":scope > .chart-tools")) build(box);
+      if (!document.fullscreenElement && !fullBox && isBig(box) && !box.dataset.shrinking) {
+        box.dataset.shrinking = "1";
+        toggleBig(box);
+        setTimeout(() => delete box.dataset.shrinking, 3000);
+      }
+    });
+  }
+  let pending = false;
+  new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; decorate(); });
+  }).observe(document.body, { childList: true, subtree: true });
+  window.__chartTools = decorate;
+  decorate();
+})();
+</script>

@@ -1,0 +1,134 @@
+<!-- Fond animé « courant d'eau abstrait / verre liquide » (WebGL, léger).
+     Nappes bleues translucides qui coulent en S du bas gauche vers le haut droit, avec de fins reflets.
+     - calculé à demi-résolution et limité à 30 images/s ; en pause quand l'onglet est caché ;
+     - image fixe si Windows demande de réduire les animations ;
+     - sans WebGL : dégradé CSS statique (classe « river-fallback »). -->
+<script>
+(function () {
+  if (document.getElementById("river-bg")) return;          // déjà en place (Streamlit relance la page)
+
+  const canvas = document.createElement("canvas");
+  canvas.id = "river-bg";
+  canvas.setAttribute("aria-hidden", "true");
+  Object.assign(canvas.style, {
+    position: "fixed", inset: "0", width: "100vw", height: "100vh",
+    zIndex: "-1", pointerEvents: "none", display: "block",
+  });
+  document.body.prepend(canvas);
+
+  const gl = canvas.getContext("webgl", { antialias: false, alpha: false, depth: false,
+                                          powerPreference: "low-power", preserveDrawingBuffer: false });
+  if (!gl) { document.body.classList.add("river-fallback"); canvas.remove(); return; }
+
+  const VERT = "attribute vec2 a; void main(){ gl_Position = vec4(a, 0.0, 1.0); }";
+  const FRAG = `
+    precision mediump float;
+    uniform vec2 r;
+    uniform float t;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1, 0)), f.x),
+                 mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), f.x), f.y);
+    }
+
+    void main() {
+      vec2 uv = gl_FragCoord.xy / r;                       // origine en bas à gauche
+      vec2 p = vec2((uv.x - 0.5) * r.x / r.y, uv.y - 0.5);
+      float along  = (p.x + p.y) * 0.7071;                 // sens du courant : bas gauche → haut droit
+      float across = (p.y - p.x) * 0.7071;
+      float T = t * 0.045;
+
+      // légère déformation lente, pour que les courbes restent organiques
+      float warp = noise(vec2(along * 1.3 - T * 2.0, across * 1.3 + T)) - 0.5;
+
+      // fond : bleu nuit → bleu profond le long du courant
+      vec3 col = mix(vec3(0.006, 0.016, 0.050), vec3(0.018, 0.055, 0.150), smoothstep(-0.9, 0.9, along));
+
+      vec3 deep = vec3(0.045, 0.150, 0.400);
+      vec3 blue = vec3(0.090, 0.330, 0.740);
+      vec3 cyan = vec3(0.150, 0.640, 0.860);
+      vec3 pale = vec3(0.780, 0.930, 1.000);
+
+      for (int i = 0; i < 4; i++) {
+        float fi = float(i);
+        float freq = 2.1 + fi * 0.45;
+        // courbe en S : deux sinus lents + la déformation, décalés d'une couche à l'autre
+        float c = across
+                - 0.24 * sin(along * freq - T * (2.6 + fi * 0.7) + fi * 1.9)
+                - 0.07 * sin(along * freq * 2.3 + T * 1.8 + fi * 3.1)
+                - warp * 0.28
+                - (fi - 1.5) * 0.20;
+        float width = 0.030 + 0.022 * fi;
+        float band = exp(-c * c / width);                  // nappe diffuse
+        vec3 tint = i == 0 ? deep : (i == 1 ? blue : (i == 2 ? cyan : blue));
+        col += tint * band * (0.42 - fi * 0.05);
+
+        // reflet fin et lumineux sur le bord de la nappe, qui va et vient doucement
+        float e = c - sqrt(width) * 0.85;
+        float shimmer = 0.55 + 0.45 * sin(along * 3.2 - T * 5.0 + fi * 2.3);
+        col += pale * exp(-e * e / 0.00022) * 0.085 * shimmer * smoothstep(0.05, 0.6, band + 0.3);
+      }
+
+      // lisibilité : bords sombres, colonne centrale (textes) atténuée
+      float vignette = 1.0 - 0.55 * smoothstep(0.35, 0.95, length((uv - 0.5) * vec2(1.1, 1.0)));
+      float center = mix(0.62, 1.0, smoothstep(0.08, 0.42, abs(uv.x - 0.5)));
+      col *= vignette * center;
+
+      col += (hash(gl_FragCoord.xy + t) - 0.5) / 255.0;    // évite l'effet d'escalier dans les dégradés
+      gl_FragColor = vec4(col, 1.0);
+    }`;
+
+  function shader(type, src) {
+    const s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    return gl.getShaderParameter(s, gl.COMPILE_STATUS) ? s : null;
+  }
+  const vs = shader(gl.VERTEX_SHADER, VERT), fs = shader(gl.FRAGMENT_SHADER, FRAG);
+  const prog = gl.createProgram();
+  if (!vs || !fs) { document.body.classList.add("river-fallback"); canvas.remove(); return; }
+  gl.attachShader(prog, vs); gl.attachShader(prog, fs); gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    document.body.classList.add("river-fallback"); canvas.remove(); return;
+  }
+  gl.useProgram(prog);
+
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(prog, "a");
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  const uRes = gl.getUniformLocation(prog, "r"), uTime = gl.getUniformLocation(prog, "t");
+
+  const SCALE = 0.5;                                        // un fond flou n'a pas besoin de pleine résolution
+  function resize() {
+    canvas.width = Math.max(1, Math.round(innerWidth * SCALE));
+    canvas.height = Math.max(1, Math.round(innerHeight * SCALE));
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.uniform2f(uRes, canvas.width, canvas.height);
+  }
+  function draw(seconds) {
+    gl.uniform1f(uTime, seconds);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+  addEventListener("resize", () => { resize(); if (still) draw(40); });
+  resize();
+
+  const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (still) { draw(40); return; }
+
+  const start = performance.now() - 40000;                 // démarre sur une composition déjà « installée »
+  let last = 0;
+  function frame(now) {
+    requestAnimationFrame(frame);
+    if (document.hidden || now - last < 33) return;         // ~30 images/s maximum
+    last = now;
+    draw((now - start) / 1000);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>

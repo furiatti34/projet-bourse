@@ -1,0 +1,69 @@
+/* Barre d'outils des graphiques, en verre (voir outils_graphiques.html pour le script). */
+[class*="st-key-chartbox"] { position: relative; overflow: visible !important; }
+  [class*="st-key-chartbox"] .modebar-container { display: none !important; }
+  [class*="st-key-chartbox"] [data-testid="stElementToolbar"] { opacity: 0 !important; pointer-events: none !important; }
+  [class*="st-key-chartbox"] [data-testid="stPlotlyChart"] { position: relative; z-index: 1; }
+  /* le bouton « Réglages » de Streamlit est invisible : c'est notre barre qui l'ouvre */
+  [class*="st-key-chartbox"] > *:has([data-testid="stPopover"]),
+[class*="st-key-chartbox"] > *:has([class*="st-key-fullbtn"]),
+[class*="st-key-chartbox"] > [class*="st-key-fullbtn"] {
+    position: absolute !important; top: 0; right: 18px; width: 1px !important; height: 1px !important;
+    overflow: hidden; opacity: 0; pointer-events: none; margin: 0 !important; }
+
+  .chart-tools { position: absolute; top: 1px; right: 18px; z-index: 0; display: flex; align-items: center;
+    gap: 2px; padding: 5px 6px; border-radius: 14px 14px 0 0;
+    background: rgba(7, 15, 34, .88); border: 1px solid rgba(140, 185, 255, .14); border-bottom: none;
+    backdrop-filter: blur(16px) saturate(120%); box-shadow: 0 -8px 24px rgba(0, 0, 0, .25);
+    transform: translateY(0); opacity: 0; pointer-events: none;
+    transition: transform .32s cubic-bezier(.2, .9, .25, 1), opacity .22s ease; }
+  [class*="st-key-chartbox"]:hover > .chart-tools, .chart-tools:focus-within, .chart-tools.pinned {
+    transform: translateY(calc(-100% + 1px)); opacity: 1; pointer-events: auto; }
+
+  .chart-tools button { all: unset; box-sizing: border-box; height: 32px; min-width: 32px; padding: 0 8px;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px; border-radius: 9px;
+    color: #c3c2b7; cursor: pointer; position: relative; font: 500 12.5px Inter, sans-serif;
+    transition: background .15s, color .15s; }
+  .chart-tools button:hover { background: rgba(255, 255, 255, .08); color: #fff; }
+  .chart-tools button:focus-visible { outline: 2px solid #3987e5; outline-offset: 1px; }
+  .chart-tools button.on { background: #fff; color: #000; }
+  .chart-tools button.settings { color: #fff; background: rgba(57, 135, 229, .22); margin-left: 4px; }
+  .chart-tools button.settings:hover { background: rgba(57, 135, 229, .36); }
+  .chart-tools svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-width: 1.7;
+    stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .chart-tools .sep { width: 1px; height: 18px; background: rgba(140, 185, 255, .16); margin: 0 4px; }
+  .chart-tools button[data-tip]::after { content: attr(data-tip); position: absolute; bottom: calc(100% + 8px);
+    left: 50%; transform: translate(-50%, 4px); white-space: nowrap; padding: 5px 9px; border-radius: 8px;
+    background: #0b1730; color: #fff; font: 500 11.5px Inter, sans-serif; border: 1px solid rgba(140, 185, 255, .16);
+    opacity: 0; pointer-events: none; transition: opacity .15s, transform .15s; }
+  .chart-tools button[data-tip]:hover::after, .chart-tools button[data-tip]:focus-visible::after {
+    opacity: 1; transform: translate(-50%, 0); }
+
+  /* panneau Réglages : verre sombre */
+  [data-testid="stPopoverBody"] { background: rgba(6, 13, 30, .94) !important; backdrop-filter: blur(22px);
+    border: 1px solid rgba(140, 185, 255, .14) !important; border-radius: 18px !important;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .5) !important; min-width: 680px;
+    max-height: 78vh; overflow-y: auto; }
+  .cfg-title { color: #8e8e93; font-size: .72rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    margin: .5rem 0 -.2rem; }
+
+  /* barres d'outils des tableaux (recherche, téléchargement…) : même style verre */
+  [data-testid="stElementToolbar"] { background: rgba(7, 15, 34, .88) !important; backdrop-filter: blur(14px);
+    border: 1px solid rgba(140, 185, 255, .14); border-radius: 12px !important; padding: 2px !important; }
+  [data-testid="stElementToolbar"] button { border-radius: 8px !important; color: #c3c2b7 !important; }
+  [data-testid="stElementToolbar"] button:hover { background: rgba(255, 255, 255, .08) !important; color: #fff !important; }
+
+/* étiquettes des choix multiples (courbes affichées) */
+[data-testid="stMultiSelect"] [data-tag] { background: rgba(57, 135, 229, .24) !important;
+    border: 1px solid rgba(140, 185, 255, .22) !important; color: #fff !important; }
+[data-testid="stMultiSelect"] [data-tag] span, [data-testid="stMultiSelect"] [data-tag] button { color: #fff !important; }
+
+/* interrupteurs : bleu quand activé, gris sinon (le blanc sur blanc ne se voyait pas) */
+[data-testid="stCheckbox"] label > span + div { background: rgba(255, 255, 255, .14) !important; }
+[data-testid="stCheckbox"] label[data-selected="true"] > span + div { background: #3987e5 !important; }
+[data-testid="stCheckbox"] label > span + div > div { background: #fff !important; }
+
+/* plein écran maison : fond bleu nuit, barre toujours visible en haut */
+[class*="st-key-chartbox"]:fullscreen { background: #030814; padding: 64px 28px 20px; overflow: auto;
+    display: flex; flex-direction: column; justify-content: center; }
+[class*="st-key-chartbox"]:fullscreen > .chart-tools { top: 14px; transform: none; opacity: 1; pointer-events: auto;
+    border-bottom: 1px solid rgba(140, 185, 255, .14); border-radius: 14px; }

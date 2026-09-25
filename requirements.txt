@@ -1,0 +1,12 @@
+pandas==3.0.6
+numpy==2.5.3
+yfinance==1.7.0
+streamlit==1.64.0
+plotly==7.1.0
+PyYAML==6.0.3
+feedparser==6.0.14
+requests==2.34.2
+deep-translator==1.11.4
+anthropic==1.8.0
+beautifulsoup4==4.15.0
+ddgs==9.16.0

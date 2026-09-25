@@ -1,0 +1,276 @@
+# ============================================================
+#  Réglages du Projet Bourse
+#  Vous pouvez modifier ce fichier sans toucher au code.
+#  (Les lignes qui commencent par # sont des commentaires.)
+# ============================================================
+
+general:
+  devise_reference: EUR
+  indice_reference: IUSQ.DE     # ETF iShares MSCI ACWI en euros (monde entier, émergents inclus)
+  capital_fictif: 100000        # argent FICTIF pour le paper trading
+  base_de_donnees: data/bourse.db
+
+# ------------------------------------------------------------
+#  Paper trading : ARGENT FICTIF UNIQUEMENT (aucun lien avec un vrai courtier)
+# ------------------------------------------------------------
+paper_trading:
+  frais:
+    pourcentage: 0.1            # frais de courtage : 0,1 % du montant…
+    minimum_eur: 1.0            # … avec un minimum de 1 €
+    change_pourcentage: 0.25    # frais de change pour un titre qui n'est pas en euros
+    glissement_pourcentage: 0.05  # écart entre le prix affiché et le prix obtenu
+  # Chaque portefeuille démarre avec le capital fictif ci-dessus.
+  # Pour ajouter un robot : copier un bloc, changer le nom et les réglages.
+  portefeuilles:
+    - nom: "Mon portefeuille"   # vous passez les ordres vous-même
+      strategie: null
+
+    # Tous les robots étudient l'« analyse du marché » (section plus bas) à chaque passage,
+    # puis décident selon leur caractère.
+    - nom: "Robot Prudent"
+      risque: faible
+      strategie: prudent
+      parametres:
+        # Répartit l'argent entre actions du monde, obligations, placement sans risque et or,
+        # selon la note de climat du marché (-100 tempête … +100 optimisme).
+        titre_actions: IUSQ.DE        # indice mondial
+        titre_obligations: EUNH.DE    # obligations d'États de la zone euro
+        titre_monetaire: XEON.DE      # placement sans risque (taux de la BCE, ne baisse presque jamais)
+        titre_refuge: 4GLD.DE         # or
+        actions_min: 0.35             # 35 % d'actions par temps de tempête…
+        actions_max: 0.75             # … jusqu'à 75 % par beau temps
+        or_base: 0.10                 # 10 % d'or en permanence
+        part_alerte_importante: 0.10  # alerte IMPORTANTE → 10 % de plus mis à l'abri dans l'or
+        part_alerte_forte: 0.20       # alerte FORTE → 20 %
+        part_refuge_max: 0.40         # jamais plus de 40 % dans l'or
+        duree_jours: 10               # durée de la mise à l'abri après une alerte
+        delai_max_heures: 48          # une info plus vieille que ça est ignorée
+        tolerance: 0.05               # ne réajuste que si un placement s'écarte de plus de 5 points
+
+    - nom: "Robot Opportuniste"
+      risque: moyen
+      strategie: opportuniste
+      parametres:
+        # Un cœur dans l'indice mondial + des « soldes » : un bon placement (tendance de fond
+        # en hausse) qui vient de trop baisser, ou un marché qui plonge après une alerte.
+        titre_coeur: IUSQ.DE
+        coeur_min: 0.50               # part du cœur par temps de tempête…
+        coeur_max: 0.75               # … et par beau temps (le reste sert aux occasions)
+        mise_par_occasion: 0.08       # 8 % du portefeuille par occasion
+        max_occasions: 4              # au plus 4 occasions en même temps
+        rsi_soldes: 35                # RSI sous 35 = « survendu » : a trop baissé trop vite
+        objectif_gain: 0.08           # revente à +8 %…
+        stop_perte: 0.06              # … ou à -6 % (stop-loss)…
+        duree_jours: 15               # … ou au bout de 15 jours
+        delai_max_heures: 24
+        tolerance: 0.07
+        marches:                      # marché qui chute après une alerte → ETF acheté
+          "^N225": XMK9.DE            # Japon
+          "^HSI": ICGA.DE             # Chine
+          "^GSPC": SXR8.DE            # États-Unis (S&P 500)
+          "^STOXX50E": EXW1.DE        # Zone euro
+          "CL=F": CRUD.MI             # Pétrole
+
+    - nom: "Robot Audacieux"
+      risque: élevé
+      strategie: audacieux
+      parametres:
+        # Levier ×2 sur le Nasdaq quand le climat est bon, pari à la baisse ×2 quand il tourne.
+        titre_attaque: LQQ.PA         # Nasdaq-100 avec levier ×2
+        titre_baisse: DBPK.DE         # S&P 500 ×2 INVERSE (gagne quand le marché baisse)
+        titre_monetaire: XEON.DE
+        seuil_attaque: 15             # note de climat au-dessus → attaque à 100 %
+        seuil_defense: -25            # en dessous (et tendance cassée) → pari à la baisse
+        duree_pari_jours: 3           # durée d'un pari à la baisse après une alerte de crise
+        stop_perte: 0.08
+        delai_max_heures: 6           # ne réagit qu'aux infos de moins de 6 h
+        tolerance: 0.10
+
+    - nom: "Robot Kamikaze"
+      risque: extrême
+      strategie: kamikaze
+      parametres:
+        # Veut gagner le plus possible, le plus vite possible. Met tout sur les 2 placements
+        # qui montent le plus vite en ce moment (levier ×3, crypto, paris à la baisse compris)
+        # et change dès qu'un autre va nettement plus vite. Pas de triche : mêmes règles que les autres.
+        part_numero_1: 0.70           # 70 % sur le plus rapide…
+        part_numero_2: 0.29           # … 29 % sur le deuxième
+        stop_perte: 0.07              # coupe une position à -7 %…
+        securisation_des: 0.12        # … et dès +12 % de gain, il sécurise :
+        securisation_recul: 0.05      # il revend si ça recule de 5 % depuis le plus haut
+        duree_min_heures: 20          # garde une position au moins 20 h (sinon les frais le ruinent)
+        ecart_rotation: 3             # change si un autre placement a 3 points d'élan de plus
+        banni_heures: 48              # après un stop-loss, il boude ce placement 48 h
+        titre_crise: QQQS.MI          # alerte de crise fraîche → Nasdaq ×3 À LA BAISSE
+        pari_crise_heures: 48
+        stop_crise: 0.10
+        delai_max_heures: 3           # ne réagit qu'aux infos de moins de 3 h
+
+    - nom: "Robot Éco"
+      risque: élevé
+      strategie: eco
+      parametres:
+        # Boosté à l'IA (gratuite, sur ce PC via Ollama) : lit le climat, les alertes et les économistes
+        # de la bibliothèque d'Éco 1, puis choisit lui-même sa répartition dans tout l'univers.
+        modele: qwen3:8b              # modèle Ollama utilisé
+        reflexion_heures: 4           # analyse approfondie toutes les 4 h (et après une alerte FORTE)
+        part_max: 0.60                # garde-fou : 60 % au plus sur un seul placement
+        levier_max: 0.50              # garde-fou : 50 % au plus en levier ou à la baisse
+        stop_perte: 0.08              # une position à -8 % est coupée sans attendre l'IA
+        delai_max_heures: 24
+        tolerance: 0.05
+
+# ------------------------------------------------------------
+#  Analyse du marché : ce que les robots étudient à chaque passage
+# ------------------------------------------------------------
+analyse:
+  # Placements que les robots peuvent étudier et acheter (tous cotés en euros).
+  # famille : actions, obligations, monetaire, or, matieres, crypto
+  # levier : 1 = normal, 2 ou 3 = amplifié, négatif = gagne quand ça baisse
+  univers:
+    - {ticker: IUSQ.DE, nom: "Indice mondial MSCI ACWI", famille: actions, levier: 1}
+    - {ticker: SXR8.DE, nom: "États-Unis S&P 500", famille: actions, levier: 1}
+    - {ticker: SXRV.DE, nom: "États-Unis Nasdaq-100 (tech)", famille: actions, levier: 1}
+    - {ticker: EXW1.DE, nom: "Zone euro Euro Stoxx 50", famille: actions, levier: 1}
+    - {ticker: EXS1.DE, nom: "Allemagne DAX", famille: actions, levier: 1}
+    - {ticker: XMK9.DE, nom: "Japon MSCI", famille: actions, levier: 1}
+    - {ticker: ICGA.DE, nom: "Chine MSCI", famille: actions, levier: 1}
+    - {ticker: QDV5.DE, nom: "Inde MSCI", famille: actions, levier: 1}
+    - {ticker: IS3N.DE, nom: "Pays émergents", famille: actions, levier: 1}
+    - {ticker: ZPDT.DE, nom: "Secteur technologie (US)", famille: actions, levier: 1}
+    - {ticker: VVSM.DE, nom: "Semi-conducteurs (puces)", famille: actions, levier: 1}
+    - {ticker: ZPDF.DE, nom: "Secteur banques-finance (US)", famille: actions, levier: 1}
+    - {ticker: ZPDH.DE, nom: "Secteur santé (US)", famille: actions, levier: 1}
+    - {ticker: ZPDE.DE, nom: "Secteur énergie (US)", famille: actions, levier: 1}
+    - {ticker: ZPDU.DE, nom: "Secteur services publics (US)", famille: actions, levier: 1}
+    - {ticker: 4GLD.DE, nom: "Or physique", famille: or, levier: 1}
+    - {ticker: CRUD.MI, nom: "Pétrole WTI", famille: matieres, levier: 1}
+    - {ticker: EUNH.DE, nom: "Obligations d'États zone euro", famille: obligations, levier: 1}
+    - {ticker: XEON.DE, nom: "Monétaire euro (sans risque)", famille: monetaire, levier: 1}
+    - {ticker: BTCE.DE, nom: "Bitcoin", famille: crypto, levier: 1}
+    - {ticker: ZETH.DE, nom: "Ethereum", famille: crypto, levier: 1}
+    - {ticker: LQQ.PA, nom: "Nasdaq-100 ×2", famille: actions, levier: 2}
+    - {ticker: DBPG.DE, nom: "S&P 500 ×2", famille: actions, levier: 2}
+    - {ticker: DEL2.DE, nom: "DAX ×2", famille: actions, levier: 2}
+    - {ticker: LVC.PA, nom: "CAC 40 ×2", famille: actions, levier: 2}
+    - {ticker: QQQ3.MI, nom: "Nasdaq-100 ×3", famille: actions, levier: 3}
+    - {ticker: 3USL.MI, nom: "S&P 500 ×3", famille: actions, levier: 3}
+    - {ticker: DBPK.DE, nom: "S&P 500 ×2 À LA BAISSE", famille: actions, levier: -2}
+    - {ticker: DES2.DE, nom: "DAX ×2 À LA BAISSE", famille: actions, levier: -2}
+    - {ticker: BX4.PA, nom: "CAC 40 ×2 À LA BAISSE", famille: actions, levier: -2}
+    - {ticker: QQQS.MI, nom: "Nasdaq-100 ×3 À LA BAISSE", famille: actions, levier: -3}
+
+  # Indicateurs du « climat » (étudiés, jamais achetés)
+  climat:
+    monde: IUSQ.DE               # tendance du marché mondial
+    peur: "^VIX"                 # indice de la peur à 1 mois…
+    peur_3mois: "^VIX3M"         # … et à 3 mois (peur à court terme > long terme = panique)
+    taux: "^TNX"                 # taux américain à 10 ans
+    dollar: "DX-Y.NYB"           # force du dollar
+    cuivre: "HG=F"               # le cuivre monte quand l'économie tourne
+    or: "GC=F"
+    credit_risque: HYG           # obligations d'entreprises fragiles…
+    credit_sur: IEF              # … comparées aux obligations d'État sûres
+
+# ------------------------------------------------------------
+#  Veille actualités + alertes
+# ------------------------------------------------------------
+veille:
+  fenetre_heures: 24            # on ne regarde que les articles des dernières 24 h
+  seuil_alerte: 50              # score minimum (sur 100) pour recevoir une notification
+  seuil_alerte_forte: 70        # au-dessus : alerte « FORTE »
+  max_alertes_par_passage: 3    # évite d'être inondé de notifications
+  langue_cible: fr              # tout est traduit dans cette langue
+
+  # Sources d'actualité (flux RSS). « officielle » = banque centrale.
+  # « agregateur » = Google Actualités (le vrai média est indiqué dans le titre).
+  sources:
+    - {nom: "Google Actualités (monde, EN)", langue: en, agregateur: true,
+       url: "https://news.google.com/rss/search?q=economy+OR+markets+OR+geopolitics+when:1d&hl=en-US&gl=US&ceid=US:en"}
+    - {nom: "Google Actualités (Asie, EN)", langue: en, agregateur: true,
+       url: "https://news.google.com/rss/search?q=Asia+markets+OR+yen+OR+yuan+OR+%22China+economy%22+when:1d&hl=en-US&gl=US&ceid=US:en"}
+    - {nom: "Google Actualités (FR)", langue: fr, agregateur: true,
+       url: "https://news.google.com/rss/search?q=%C3%A9conomie+OR+march%C3%A9s+OR+g%C3%A9opolitique+when:1d&hl=fr&gl=FR&ceid=FR:fr"}
+    - {nom: "BBC Business", langue: en, url: "https://feeds.bbci.co.uk/news/business/rss.xml"}
+    - {nom: "BBC World", langue: en, url: "https://feeds.bbci.co.uk/news/world/rss.xml"}
+    - {nom: "CNBC World", langue: en, url: "https://www.cnbc.com/id/100727362/device/rss/rss.html"}
+    - {nom: "CNBC Economy", langue: en, url: "https://www.cnbc.com/id/20910258/device/rss/rss.html"}
+    - {nom: "Al Jazeera", langue: en, url: "https://www.aljazeera.com/xml/rss/all.xml"}
+    - {nom: "Nikkei Asia", langue: en, url: "https://asia.nikkei.com/rss/feed/nar"}
+    - {nom: "South China Morning Post", langue: en, url: "https://www.scmp.com/rss/92/feed"}
+    - {nom: "Economic Times (Inde)", langue: en, url: "https://economictimes.indiatimes.com/rssfeedstopstories.cms"}
+    - {nom: "Investing.com", langue: en, url: "https://www.investing.com/rss/news_14.rss"}
+    - {nom: "Le Monde Économie", langue: fr, url: "https://www.lemonde.fr/economie/rss_full.xml"}
+    - {nom: "Le Monde International", langue: fr, url: "https://www.lemonde.fr/international/rss_full.xml"}
+    - {nom: "France 24", langue: fr, url: "https://www.france24.com/fr/rss"}
+    - {nom: "Réserve fédérale (Fed)", langue: en, officielle: true, url: "https://www.federalreserve.gov/feeds/press_all.xml"}
+    - {nom: "BCE", langue: en, officielle: true, url: "https://www.ecb.europa.eu/rss/press.html"}
+    - {nom: "Banque du Japon", langue: en, officielle: true, url: "https://www.boj.or.jp/en/rss/whatsnew.xml"}
+
+  # Indicateurs de marché surveillés. Si une actualité parle d'un de ces sujets
+  # (« mots ») ET que l'indicateur bouge de façon inhabituelle, l'alerte est renforcée.
+  # Un mot se terminant par * reconnaît aussi ses variantes (obligat* = obligation, obligataire…).
+  indicateurs_marche:
+    - {ticker: "JPY=X", nom: "Dollar/Yen", mots: [yen, japan, japon, "bank of japan", "banque du japon", boj, ueda, nikkei, tokyo]}
+    - {ticker: "EURUSD=X", nom: "Euro/Dollar", mots: [euro, ecb, bce, eurozone, "zone euro", lagarde]}
+    - {ticker: "CNY=X", nom: "Dollar/Yuan", mots: [yuan, china, chine, chinese, chinois, pboc, beijing, pekin, xi]}
+    - {ticker: "CL=F", nom: "Pétrole (WTI)", mots: [oil, petrole, crude, brut, opec, opep, iran, hormuz, ormuz, saudi, saoudite, russia, russie]}
+    - {ticker: "GC=F", nom: "Or", mots: [gold, "prix de l'or", "metal jaune", "safe haven", "valeur refuge"]}
+    - {ticker: "^TNX", nom: "Taux US à 10 ans", mots: [treasury, treasuries, yield, bond, "obligat*", "taux americain"]}
+    - {ticker: "^GSPC", nom: "S&P 500", mots: ["wall street", "s&p", "federal reserve", fed, powell, "us stocks"]}
+    - {ticker: "^N225", nom: "Nikkei 225", mots: [nikkei, japan, japon, tokyo]}
+    - {ticker: "^HSI", nom: "Hang Seng", mots: ["hong kong", china, chine, taiwan]}
+    - {ticker: "^STOXX50E", nom: "Euro Stoxx 50", mots: [europe, european, europeen, eurozone, "zone euro"]}
+    - {ticker: "^VIX", nom: "VIX (indice de peur)", mots: []}
+
+# ------------------------------------------------------------
+#  Éco 1 : l'assistant économiste (page « Éco 1 » du site)
+#  Il lit une bibliothèque de textes d'économistes (rangée dans la base), consulte les données
+#  du site (climat du marché, robots, alertes, cours) et peut chercher sur le web.
+#  Mode Gratuit : aucune clé. Modes Standard/Maximum : clé d'API Claude à coller une fois dans la page Éco 1
+#  (enregistrée dans .streamlit/secrets.toml).
+# ------------------------------------------------------------
+eco1:
+  modes:                        # choix proposé dans la page (le premier est celui par défaut)
+    Gratuit: {modele: "ollama:qwen3:8b"}                 # IA sur ce PC (Ollama) : 0 €, sans web, plus lente
+    Standard: {modele: claude-opus-5, effort: high}      # API Claude : quelques centimes par question
+    Maximum: {modele: claude-fable-5-1, effort: xhigh}   # le plus puissant, ~2× plus cher
+  recherche_web: true           # peut chercher l'actualité sur le web (quelques centimes par recherche)
+  mise_a_jour_heures: 12        # la veille automatique remet la bibliothèque à jour toutes les 12 h
+  articles_max_par_source: 40   # nouveaux articles lus au plus par source et par mise à jour
+  # Bibliothèque. « ecole » : pour qu'Éco 1 confronte des pensées différentes.
+  # « pagination » : wordpress / blogger = on remonte aussi dans les archives ; « pages_archives » = jusqu'où.
+  # « lire_page » : le flux ne donne qu'un résumé → on lit l'article sur le site.
+  sources:
+    - {nom: "Institut des Libertés (Charles Gave)", langue: fr, ecole: "libéral, conservateur, méfiant envers l'euro et les banques centrales",
+       url: "https://institutdeslibertes.org/feed/", pagination: wordpress, pages_archives: 10, lire_page: true}
+    - {nom: "IREF", langue: fr, ecole: "libéral (fiscalité, dépense publique)",
+       url: "https://fr.irefeurope.org/feed/", pagination: wordpress, pages_archives: 5, lire_page: true}
+    - {nom: "Les Économistes atterrés", langue: fr, ecole: "hétérodoxe, keynésien de gauche",
+       url: "https://www.atterres.org/feed/", pagination: wordpress, pages_archives: 5, lire_page: true}
+    - {nom: "Telos", langue: fr, ecole: "centre, universitaires européens",
+       url: "https://www.telos-eu.com/fr/rss.xml", lire_page: true}
+    - {nom: "Fipeco (François Ecalle)", langue: fr, ecole: "finances publiques françaises, factuel",
+       url: "https://www.fipeco.fr/rss.xml", lire_page: true}
+    - {nom: "Aswath Damodaran (Musings on Markets)", langue: en, ecole: "valorisation, finance d'entreprise",
+       url: "https://aswathdamodaran.blogspot.com/feeds/posts/default", pagination: blogger, pages_archives: 4}
+    - {nom: "Paul Krugman", langue: en, ecole: "keynésien, prix Nobel",
+       url: "https://paulkrugman.substack.com/feed"}
+    - {nom: "John Cochrane (The Grumpy Economist)", langue: en, ecole: "libéral, école de Chicago",
+       url: "https://www.grumpy-economist.com/feed", lire_page: true}
+    - {nom: "Noahpinion (Noah Smith)", langue: en, ecole: "centre, pragmatique",
+       url: "https://www.noahpinion.blog/feed"}
+    - {nom: "Apricitas Economics", langue: en, ecole: "macro par les données",
+       url: "https://www.apricitas.io/feed"}
+    - {nom: "The Overshoot (Matthew Klein)", langue: en, ecole: "macro, flux financiers mondiaux",
+       url: "https://theovershoot.co/feed"}
+    - {nom: "Liberty Street Economics (Fed de New York)", langue: en, ecole: "banque centrale, recherche",
+       url: "https://libertystreeteconomics.newyorkfed.org/feed/"}
+    - {nom: "Joachim Klement (Klement on Investing)", langue: en, ecole: "investissement, études empiriques",
+       url: "https://klementoninvesting.substack.com/feed", lire_page: true}
+    - {nom: "Calculated Risk", langue: en, ecole: "immobilier et conjoncture américaine",
+       url: "https://www.calculatedriskblog.com/feeds/posts/default", pagination: blogger, pages_archives: 2}
+    - {nom: "Marginal Revolution (Tyler Cowen)", langue: en, ecole: "libéral, éclectique",
+       url: "https://marginalrevolution.com/feed", lire_page: true}
+    - {nom: "BRI (Banque des règlements internationaux)", langue: en, ecole: "institution, stabilité financière",
+       url: "https://www.bis.org/doclist/bis_fsi_publs.rss", lire_page: true}

@@ -1,0 +1,30 @@
+[server]
+headless = true
+port = 8501
+
+[browser]
+gatherUsageStats = false
+
+# Direction artistique : sombre et épurée sur un fond animé « courant d'eau » bleu (voir src/bourse/ui/fond_riviere.html)
+[theme]
+base = "dark"
+primaryColor = "#ffffff"
+backgroundColor = "#030814"
+secondaryBackgroundColor = "#0c1830"
+textColor = "#ffffff"
+borderColor = "#16223d"
+dataframeBorderColor = "#122038"
+dataframeHeaderBackgroundColor = "#07112a"
+showWidgetBorder = false
+linkColor = "#ffffff"
+greenColor = "#30d158"
+redColor = "#ff453a"
+font = "Inter:https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap, sans-serif"
+baseFontSize = 15
+baseRadius = "14px"
+buttonRadius = "999px"
+headingFontWeights = [700, 600, 600]
+metricValueFontWeight = 600
+chartCategoricalColors = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181"]
+codeTextColor = "#8e8e93"
+codeBackgroundColor = "#030814"

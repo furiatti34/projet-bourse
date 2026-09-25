@@ -1,0 +1,236 @@
+<!-- Volet des alertes : la cloche (alerts_panel.bell) porte les alertes dans data-alerts ;
+     ce script crée le volet une seule fois, sur <body>, et le remplit à chaque ouverture. -->
+<script>
+// NB : aucune balise écrite en clair dans ce script (le filtre DOMPurify de Streamlit supprimerait le script).
+(function () {
+  if (window.__alertsPanel) { window.__alertsPanel(); return; }
+  const SEEN_KEY = "projetbourse-alertes-vues";
+  const NS = "http://www.w3.org/2000/svg";
+
+  function icon(paths) {
+    const s = document.createElementNS(NS, "svg");
+    s.setAttribute("viewBox", "0 0 24 24"); s.setAttribute("aria-hidden", "true");
+    for (const d of paths) { const p = document.createElementNS(NS, "path"); p.setAttribute("d", d); s.appendChild(p); }
+    return s;
+  }
+  // globe futuriste en fil de fer, deux couleurs : bleu électrique (sphère, méridiens, orbite) et blanc (parallèles)
+  function globe() {
+    const s = document.createElementNS(NS, "svg");
+    s.setAttribute("viewBox", "0 0 40 40"); s.setAttribute("aria-hidden", "true"); s.setAttribute("class", "globe");
+    const shape = (tag, cls, attrs) => {
+      const e = document.createElementNS(NS, tag); e.setAttribute("class", cls);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      s.appendChild(e); return e;
+    };
+    shape("circle", "gl-core", { cx: 20, cy: 20, r: 14.5 });
+    shape("path", "gl-b", { d: "M5.5 20h29M7.4 12.8h25.2M7.4 27.2h25.2" });
+    shape("path", "gl-b gl-axis", { d: "M20 5.5v29" });
+    shape("ellipse", "gl-a gl-mer", { cx: 20, cy: 20, rx: 7, ry: 14.5 });
+    shape("circle", "gl-a", { cx: 20, cy: 20, r: 14.5 });
+    shape("ellipse", "gl-a gl-orbit", { cx: 20, cy: 20, rx: 19.5, ry: 5.5, transform: "rotate(-24 20 20)" });
+    shape("circle", "gl-sat", { cx: 2.2, cy: 27.9, r: 1.7 });
+    return s;
+  }
+  // flèches de rafraîchissement, même style que le globe : arc bleu + arc blanc, anneau pointillé au centre
+  function refreshIcon() {
+    const s = document.createElementNS(NS, "svg");
+    s.setAttribute("viewBox", "0 0 40 40"); s.setAttribute("aria-hidden", "true"); s.setAttribute("class", "refresh-icon");
+    const shape = (tag, cls, attrs) => {
+      const e = document.createElementNS(NS, tag); e.setAttribute("class", cls);
+      for (const k in attrs) e.setAttribute(k, attrs[k]);
+      s.appendChild(e); return e;
+    };
+    shape("circle", "gl-core", { cx: 20, cy: 20, r: 13 });
+    shape("circle", "gl-a gl-orbit", { cx: 20, cy: 20, r: 7 });
+    shape("path", "gl-a", { d: "M7.78 15.55A13 13 0 0 1 32.22 15.55M34.16 12.71L32.73 16.96L28.9 14.63" });
+    shape("path", "gl-b rf-white", { d: "M32.22 24.45A13 13 0 0 1 7.78 24.45M5.84 27.29L7.27 23.04L11.1 25.37" });
+    shape("circle", "gl-sat", { cx: 20, cy: 20, r: 1.9 });
+    return s;
+  }
+  function node(tag, cls, text) {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  function lastSeen() { try { return +localStorage.getItem(SEEN_KEY) || 0; } catch (e) { return 0; } }
+  function setSeen(id) { try { localStorage.setItem(SEEN_KEY, String(id)); } catch (e) {} }
+  function alertsOf(bell) { try { return JSON.parse(bell.dataset.alerts || "[]"); } catch (e) { return []; } }
+  function currentBell() { return document.querySelector(".alert-bell"); }
+
+  function ago(iso) {
+    const t = Date.parse(iso);
+    if (!t) return "";
+    const min = Math.max(0, Math.round((Date.now() - t) / 60000));
+    if (min < 1) return "à l'instant";
+    if (min < 60) return "il y a " + min + " min";
+    const h = Math.round(min / 60);
+    if (h < 24) return "il y a " + h + " h";
+    const d = Math.round(h / 24);
+    return d === 1 ? "hier" : "il y a " + d + " jours";
+  }
+  function when(iso) {
+    return new Date(iso).toLocaleString("fr-FR", { timeZone: "Europe/Paris", weekday: "short", day: "2-digit",
+      month: "2-digit", hour: "2-digit", minute: "2-digit" });
+  }
+
+  // --- volet (créé une fois) ---
+  const veil = node("div", "ap-veil");
+  const drawer = node("aside", "ap-drawer");
+  drawer.setAttribute("role", "dialog"); drawer.setAttribute("aria-label", "Alertes"); drawer.setAttribute("aria-hidden", "true");
+  const head = node("div", "ap-head");
+  const titles = node("div");
+  titles.appendChild(node("div", "ap-title", "Alertes"));
+  const sub = node("div", "ap-sub");
+  titles.appendChild(sub);
+  const close = node("button", "ap-close");
+  close.type = "button"; close.setAttribute("aria-label", "Fermer");
+  close.appendChild(icon(["M6 6l12 12M18 6L6 18"]));
+  head.appendChild(titles); head.appendChild(close);
+  const list = node("div", "ap-list");
+  drawer.appendChild(head); drawer.appendChild(list);
+  document.body.appendChild(veil); document.body.appendChild(drawer);
+
+  function render(alerts, seen) {
+    list.replaceChildren();
+    sub.textContent = alerts.length
+      ? alerts.length + " gros titre" + (alerts.length > 1 ? "s" : "") + " · le plus récent en haut"
+      : "";
+    if (!alerts.length) { list.appendChild(node("div", "ap-empty", "Aucune alerte pour l'instant.")); return; }
+    alerts.forEach((a, i) => {
+      const card = node("a", "ap-card " + (a.level === "FORTE" ? "forte" : "imp"));
+      if (a.url) { card.href = a.url; card.target = "_blank"; card.rel = "noopener noreferrer"; }
+      card.style.animationDelay = Math.min(i, 10) * 40 + "ms";
+      const meter = node("span", "ap-meter");
+      meter.style.width = Math.max(4, Math.min(100, a.score || 0)) + "%";
+      card.appendChild(meter);
+
+      const top = node("div", "ap-top");
+      top.appendChild(node("span", "ap-chip", a.level === "FORTE" ? "Forte" : "Importante"));
+      const sc = node("span"); sc.appendChild(node("span", "ap-score", String(a.score))); sc.append(" /100");
+      top.appendChild(sc);
+      top.appendChild(node("span", null, "· " + ago(a.published || a.created)));
+      if (a.id > seen) { const n = node("span", "ap-new"); n.title = "Nouvelle"; top.appendChild(n); }
+      card.appendChild(top);
+
+      card.appendChild(node("div", "ap-headline", a.title_fr || a.title));
+      if (a.reasons) card.appendChild(node("div", "ap-why", String(a.reasons).split(" | ").join(" · ")));
+
+      const foot = node("div", "ap-foot");
+      const nSrc = (a.sources || "").split(",").filter((s) => s.trim()).length;
+      foot.appendChild(node("span", null, when(a.created) + (nSrc ? " · " + nSrc + " média" + (nSrc > 1 ? "s" : "") : "")));
+      const open = node("span", "ap-open", "Lire l'article");
+      open.appendChild(icon(["M8 16L16 8M9 8h7v7"]));
+      if (a.url) foot.appendChild(open);
+      card.appendChild(foot);
+      list.appendChild(card);
+    });
+  }
+
+  let isOpen = false;
+  function openPanel() {
+    const bell = currentBell();
+    const alerts = bell ? alertsOf(bell) : [];
+    render(alerts, lastSeen());
+    if (alerts.length) setSeen(Math.max(...alerts.map((a) => a.id)));
+    isOpen = true;
+    drawer.classList.add("show"); veil.classList.add("show");
+    drawer.setAttribute("aria-hidden", "false");
+    decorate();
+    setTimeout(() => close.focus(), 50);
+  }
+  function closePanel() {
+    if (!isOpen) return;
+    isOpen = false;
+    drawer.classList.remove("show"); veil.classList.remove("show");
+    drawer.setAttribute("aria-hidden", "true");
+    decorate();
+    const bell = currentBell(); if (bell) bell.focus();
+  }
+
+  document.addEventListener("click", (e) => {
+    if (e.target.closest && e.target.closest(".alert-bell")) { isOpen ? closePanel() : openPanel(); }
+  });
+  close.addEventListener("click", closePanel);
+  veil.addEventListener("click", closePanel);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closePanel(); });
+
+  // « Rafraîchir » : au clic l'icône démarre doucement et tourne lentement pendant le rechargement,
+  // puis enchaîne quelques tours rapides quand Streamlit a fini (attribut data-test-script-state de stApp)
+  const calm = matchMedia("(prefers-reduced-motion: reduce)");
+  let spin = null;
+  function angleOf(el) {
+    const t = getComputedStyle(el).transform;
+    if (!t || t === "none") return 0;
+    const m = new DOMMatrixReadOnly(t);
+    return Math.atan2(m.b, m.a) * 180 / Math.PI;
+  }
+  function turn(from, to) { return [{ transform: "rotate(" + from + "deg)" }, { transform: "rotate(" + to + "deg)" }]; }
+  function startSpin(rb) {
+    const svg = rb.querySelector("svg.refresh-icon");
+    if (!svg || spin || calm.matches) return;
+    const a = angleOf(svg);
+    // 1er tour en accélérant, puis tours lents réguliers (même vitesse au raccord : 1,2 s par tour)
+    const warm = svg.animate(turn(a, a + 360), { duration: 1200, easing: "cubic-bezier(.55, 0, .7, .7)" });
+    spin = { rb, svg, anims: [warm], sawRun: false, t0: performance.now(), done: false };
+    warm.onfinish = () => {
+      if (spin && !spin.done) spin.anims.push(svg.animate(turn(a + 360, a + 720), { duration: 1200, iterations: Infinity }));
+    };
+    rb.classList.add("busy");
+    spin.fallback = setTimeout(finishSpin, 30000);
+  }
+  function finishSpin() {
+    if (!spin || spin.done) return;
+    const wait = 700 - (performance.now() - spin.t0);      // laisser voir un peu la rotation lente
+    if (wait > 0) { setTimeout(finishSpin, wait); return; }
+    const { rb, svg, anims } = spin;
+    spin.done = true; clearTimeout(spin.fallback);
+    const a = angleOf(svg);
+    anims.forEach((x) => x.cancel());
+    const rest = rb.matches(":hover") ? 180 : 0;           // s'arrêter là où le style au repos place l'icône
+    let end = a + 3 * 360;
+    end += ((rest - end) % 360 + 360) % 360;
+    const burst = svg.animate(turn(a, end), { duration: 1300, easing: "cubic-bezier(.2, .75, .3, 1)" });
+    burst.onfinish = burst.oncancel = () => { rb.classList.remove("busy"); spin = null; };
+  }
+  function watchRun() {
+    const app = document.querySelector('[data-testid="stApp"]');
+    if (!app) return;
+    new MutationObserver(() => {
+      if (!spin || spin.done) return;
+      const state = app.getAttribute("data-test-script-state");
+      if (state === "running") spin.sawRun = true;
+      else if (state === "notRunning" && spin.sawRun) finishSpin();
+    }).observe(app, { attributes: true, attributeFilter: ["data-test-script-state"] });
+  }
+  watchRun();
+
+  // pastille rouge = alertes jamais vues ; la cloche est blanche quand le volet est ouvert
+  function decorate() {
+    const rb = document.querySelector('[class*="st-key-refreshbtn"] button');
+    if (rb && !rb.querySelector("svg.refresh-icon")) {
+      rb.prepend(refreshIcon());
+      rb.setAttribute("aria-label", "Rafraîchir");
+      rb.addEventListener("click", () => startSpin(rb));
+    }
+    const bell = currentBell();
+    if (!bell) return;
+    const seen = lastSeen();
+    const fresh = alertsOf(bell).filter((a) => a.id > seen).length;
+    if (!bell.querySelector("svg.globe")) { const old = bell.querySelector("svg"); if (old) old.remove(); bell.prepend(globe()); }
+    const badge = bell.querySelector(".alert-badge");
+    if (badge) { badge.hidden = !fresh || isOpen; badge.textContent = fresh > 9 ? "9+" : String(fresh); }
+    bell.classList.toggle("open", isOpen);
+    bell.classList.toggle("has-new", fresh > 0 && !isOpen);
+    bell.setAttribute("aria-expanded", String(isOpen));
+  }
+  let pending = false;
+  new MutationObserver(() => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => { pending = false; decorate(); });
+  }).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-alerts"] });
+  window.__alertsPanel = decorate;
+  decorate();
+})();
+</script>

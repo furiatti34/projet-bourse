@@ -1,0 +1,145 @@
+"""Robots du labo : les robots du présent, plus les corrections gardées (voir data/labo/carnet.md).
+
+Au départ, chaque robot du labo est identique à celui du présent. Une correction s'ajoute ici,
+en surchargeant une méthode, avec un commentaire qui renvoie au numéro du carnet.
+"""
+from datetime import datetime, timedelta
+
+from bourse import clock
+from bourse.strategies.audacieux import ATTACK, BEAR, NASDAQ, NEUTRAL, AudacieuxStrategy
+from bourse.strategies.base import CASH_BUFFER
+from bourse.strategies.kamikaze import FAMILIES, KamikazeStrategy
+from bourse.strategies.opportuniste import OpportunisteStrategy
+from bourse.strategies.prudent import PrudentStrategy
+
+
+class _ScoreOverride:
+    """L'analyse du marché telle quelle, avec une autre note de climat (voir carnet n°4)."""
+
+    def __init__(self, view, score: int):
+        self._view, self.risk_score = view, score
+
+    def __getattr__(self, name):
+        return getattr(self._view, name)
+
+
+class LabPrudent(PrudentStrategy):
+    name = "labo_prudent"
+
+    def on_cycle(self, broker, state):
+        """Carnet n°4 : la part d'actions suit la moyenne de la note de climat des `lissage_jours` derniers jours
+        (au présent : la note du moment, qui varie beaucoup d'un jour à l'autre et provoque des réajustements)."""
+        days = int(self.params.get("lissage_jours", 0))
+        if days > 1 and self.view is not None:
+            history = state.setdefault("climats", {})
+            history[clock.now().date().isoformat()] = self.view.risk_score
+            for old in sorted(history)[:-days]:
+                del history[old]
+            smooth = round(sum(history.values()) / len(history))
+            self.think(f"Note de climat moyenne sur {len(history)} jour(s) : {smooth:+d} (aujourd'hui {self.view.risk_score:+d}).")
+            self.view = _ScoreOverride(self.view, smooth)
+        super().on_cycle(broker, state)
+
+
+class LabOpportuniste(OpportunisteStrategy):
+    name = "labo_opportuniste"
+
+    def on_cycle(self, broker, state):
+        total = broker.total_value()
+        trades = self.trade_tickers(state)
+        held = sum(p["valeur_eur"] for p in broker.positions() if p["ticker"] in trades)
+        self._occupied = held / total if total else 0.0
+        super().on_cycle(broker, state)
+
+    def core_share(self) -> float:
+        """Carnet n°5 : l'argent qui attend des occasions ne dort plus. Hors tempête, la réserve en liquide se
+        limite à UNE mise (`reserve_une_mise`) ; le reste rejoint le cœur (indice mondial)."""
+        base = super().core_share()
+        if not self.params.get("reserve_une_mise") or self.view.risk_score <= -30:
+            return base
+        free = 1 - CASH_BUFFER - self.params["mise_par_occasion"] - getattr(self, "_occupied", 0.0)
+        return round(max(base, free), 3)
+
+
+class LabAudacieux(AudacieuxStrategy):
+    name = "labo_audacieux"
+
+    def on_cycle(self, broker, state):
+        self._state = state
+        super().on_cycle(broker, state)
+
+    def wanted_mode(self) -> str:
+        """Carnet n°3 : l'attaque (100 % Nasdaq ×2) exige en plus que le Nasdaq soit au-dessus de sa moyenne
+        200 jours (`attaque_tendance_longue`). Au présent, la moyenne 50 jours suffit."""
+        mode = super().wanted_mode()
+        if mode == ATTACK and self.params.get("attaque_tendance_longue"):
+            nasdaq = self.view.asset(NASDAQ)
+            if nasdaq is not None and not nasdaq.above_ma200:
+                self.think("Climat favorable, mais le Nasdaq est sous sa moyenne 200 jours : pas de levier à 100 %.")
+                return NEUTRAL
+        # Carnet n°6 : une posture n'est quittée que si la note s'éloigne du seuil de `marge_posture` points
+        margin = self.params.get("marge_posture")
+        current = getattr(self, "_state", {}).get("mode")
+        if margin and mode == NEUTRAL and current in (ATTACK, BEAR):
+            p, risk = self.params, self.view.risk_score
+            nasdaq, world = self.view.asset(NASDAQ), self.view.factor("Tendance mondiale")
+            if current == ATTACK and risk >= p["seuil_attaque"] - margin and (nasdaq is None or nasdaq.above_ma50):
+                self.think(f"Note {risk:+d} un peu sous le seuil d'attaque, mais dans la marge : je garde l'attaque.")
+                return ATTACK
+            if current == BEAR and risk <= p["seuil_defense"] + margin and world and world.value < 0:
+                self.think(f"Note {risk:+d} un peu au-dessus du seuil de défense, mais dans la marge : je reste en baisse.")
+                return BEAR
+        return mode
+
+    def targets(self, mode: str) -> dict[str, float]:
+        """Carnet n°2 : en posture neutre, le marché d'accompagnement (50 %) est gardé tant qu'il reste dans
+        le top `garder_rang` de l'élan (1 au présent : il changeait dès qu'un autre passait devant)."""
+        keep_rank = int(self.params.get("garder_rang", 1))
+        if mode != NEUTRAL or keep_rank <= 1:
+            return super().targets(mode)
+        p, full = self.params, 1 - CASH_BUFFER
+        ranked = sorted(self.view.pick(families=("actions",), leverage=(1,)), key=lambda a: -a.momentum)
+        state = getattr(self, "_state", {})
+        current = next((a for a in ranked[:keep_rank] if a.ticker == state.get("compagnon")), None)
+        best = current or ranked[0]
+        state["compagnon"] = best.ticker
+        self.think(f"Marché d'accompagnement : {best.label} (élan {best.momentum:+.1f}"
+                   + (", gardé car encore dans le haut du classement)" if current and best is not ranked[0] else ")"))
+        return {p["titre_attaque"]: 0.50, best.ticker: round(full - 0.50, 3)}
+
+
+class LabKamikaze(KamikazeStrategy):
+    name = "labo_kamikaze"
+
+    def pick_horses(self, state, now: datetime) -> list:
+        """Carnet n°1 : un cheval déjà détenu est gardé tant qu'il reste dans le top `garder_rang`
+        (2 au présent). Achat : toujours les 2 plus rapides. Évite de tout revendre dès que le classement
+        bouge d'une place (chaque aller-retour coûte ~0,3 % de frais et d'écart de prix)."""
+        p, view = self.params, self.view
+        keep_rank = int(p.get("garder_rang", 2))
+        # Carnet n°7 : `exiger_tendance` → seulement des placements au-dessus de leur moyenne 50 jours
+        trend = bool(p.get("exiger_tendance"))
+        ranked = sorted((a for a in view.pick(families=FAMILIES, exclude=set(state.get("banned", {})))
+                         if a.sprint > 0 and a.ret_5d > 0 and (not trend or a.above_ma50)), key=lambda a: -a.sprint)
+        self.think("Ce qui monte le plus vite : " + ", ".join(
+            f"{a.name} ({a.sprint:+.1f})" for a in ranked[:4]) if ranked else "Rien ne monte en ce moment.")
+        if not ranked:
+            return []
+        best = ranked[0].sprint
+        horses = []
+        for ticker, entry in state.get("entries", {}).items():   # garder ses chevaux ?
+            a = view.asset(ticker)
+            if a is None:
+                continue
+            young = now - datetime.fromisoformat(entry["since"]) < timedelta(hours=p["duree_min_heures"])
+            if a in ranked[:keep_rank] or young or best - a.sprint < p["ecart_rotation"]:
+                horses.append(a)
+        for a in ranked:
+            if len(horses) >= 2:
+                break
+            if a not in horses:
+                horses.append(a)
+        return sorted(horses[:2], key=lambda a: -a.sprint)
+
+
+LAB = {cls.name: cls for cls in (LabPrudent, LabOpportuniste, LabAudacieux, LabKamikaze)}
