@@ -15,3 +15,6 @@ from bourse.config import PROJECT_ROOT
 
 MICRO_DIR = PROJECT_ROOT / "data" / "micro"
 PAIRES = ["BTCEUR", "ETHEUR", "SOLEUR"]
+# Banc d'essai : on ajoute des cryptos qui se sont effondrées (Terra/LUNA a disparu en mai 2022, Polkadot et
+# Avalanche ont perdu 80-90 %) pour éviter le « biais du survivant » : ne tester que sur des gagnantes connues.
+PAIRES_BANC = PAIRES + ["XRPEUR", "ADAEUR", "DOGEEUR", "DOTEUR", "AVAXEUR", "LUNAEUR"]

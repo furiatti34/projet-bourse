@@ -9,7 +9,7 @@ Trois périodes qui ne se chevauchent pas (comme pour le labo) :
 
 Une stratégie « survit » à une période si, pour un scénario de frais donné :
     - elle gagne en moyenne par opération, toutes paires confondues,
-    - elle gagne sur au moins 2 paires sur 3,
+    - elle gagne sur plus de la moitié des paires,
     - elle a fait au moins 100 opérations (sinon c'est peut-être de la chance).
 
 Le « modèle IA » apprend sur l'entraînement seul, avec tous les indicateurs et toutes les figures à la fois.
@@ -24,7 +24,7 @@ from datetime import date, datetime, timezone
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
-from . import MICRO_DIR, PAIRES, donnees
+from . import MICRO_DIR, PAIRES_BANC, donnees
 from .moteur import SCENARIOS, Regles, bilan, simuler
 from .strategies import Strategie, catalogue, contexte
 
@@ -146,11 +146,12 @@ def strategie_modele(modele: dict) -> Strategie:
 
 def _passe(bilans_paires: list[dict], rends: list[np.ndarray]) -> bool:
     tous = np.concatenate(rends) if rends else np.zeros(0)
-    positives = sum(1 for b in bilans_paires if b["operations"] and b["moyenne_pb"] > 0)
-    return bool(len(tous) >= MIN_OPERATIONS and tous.mean() > 0 and positives >= min(2, len(bilans_paires)))
+    actives = [b for b in bilans_paires if b["operations"]]
+    positives = sum(1 for b in actives if b["moyenne_pb"] > 0)
+    return bool(len(tous) >= MIN_OPERATIONS and tous.mean() > 0 and positives * 2 > len(actives))
 
 
-def evaluer(paires=PAIRES, verbose=True) -> dict:
+def evaluer(paires=PAIRES_BANC, verbose=True) -> dict:
     t0 = time.time()
     # 1er passage : exemples d'apprentissage du modèle IA (une paire à la fois, pour la mémoire)
     ech = []
@@ -226,4 +227,4 @@ def evaluer(paires=PAIRES, verbose=True) -> dict:
 
 
 if __name__ == "__main__":
-    evaluer(sys.argv[1:] or PAIRES)
+    evaluer(sys.argv[1:] or PAIRES_BANC)
