@@ -2,8 +2,10 @@
 # Chaque ligne renvoie à une entrée du carnet (data/labo/carnet.md).
 prudent:
   lissage_jours: 5      # carnet n°4 : note de climat moyenne sur 5 jours
+  actions_max: 0.85     # carnet n°24 : jusqu'à 85 % d'actions par beau temps (75 % au présent)
 opportuniste:
   reserve_une_mise: true   # carnet n°5 : hors tempête, une seule mise gardée en liquide
+  duree_jours: 30       # carnet n°25 : une occasion a 30 jours pour rebondir (15 au présent)
   soldes_si_monde_haussier: true   # carnet n°13 : pas de soldes quand le marché mondial est sous sa moyenne 200 jours
 audacieux:
   marge_posture: 10     # carnet n°6 : marge de 10 points avant de quitter une posture
