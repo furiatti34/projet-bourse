@@ -27,6 +27,9 @@ BRANCHE = "donnees"           # branche du dépôt qui porte la copie (réécrit
 ARCHIVE = "donnees.zip"
 FRAICHEUR_S = 5 * 60          # on retélécharge au plus toutes les 5 min
 _verrou = threading.Lock()
+# Fichier déposé par la publication dans la copie en ligne (jamais sur ce PC) : il impose le mode
+# spectateur même si les secrets sont oubliés, et contient le nom du dépôt.
+MARQUE = PROJECT_ROOT / "MODE_SPECTATEUR"
 
 
 def _reglage(nom: str) -> str | None:
@@ -41,7 +44,7 @@ def _reglage(nom: str) -> str | None:
 
 def spectateur() -> bool:
     """Vrai sur le site en ligne : aucune action possible, consultation seulement."""
-    return str(_reglage("BOURSE_SPECTATEUR") or "") == "1"
+    return MARQUE.exists() or str(_reglage("BOURSE_SPECTATEUR") or "") == "1"
 
 
 def preparer() -> bool:
@@ -63,7 +66,8 @@ def preparer() -> bool:
 
 
 def _telecharger() -> None:
-    depot, jeton = _reglage("GITHUB_DEPOT"), _reglage("GITHUB_JETON")
+    depot = _reglage("GITHUB_DEPOT") or (MARQUE.read_text(encoding="utf-8").strip() if MARQUE.exists() else None)
+    jeton = _reglage("GITHUB_JETON")
     rep = requests.get(f"https://api.github.com/repos/{depot}/contents/{ARCHIVE}", params={"ref": BRANCHE},
                        headers={"Accept": "application/vnd.github.raw",
                                 **({"Authorization": f"Bearer {jeton}"} if jeton else {})},
