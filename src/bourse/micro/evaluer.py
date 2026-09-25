@@ -117,6 +117,17 @@ def entrainer_modele(echantillons: list) -> dict:
             "principales": [(noms[i], float(w[i])) for i in ordre[:12]]}
 
 
+NOM_MODELE = "Modèle IA (tous les indicateurs et patterns)"
+
+
+def charger_modele() -> dict:
+    """Le modèle appris par le dernier banc d'essai (data/micro/modele.json)."""
+    m = json.loads((MICRO_DIR / "modele.json").read_text(encoding="utf-8"))
+    for k in ("w", "mu", "sd"):
+        m[k] = np.array(m[k])
+    return m
+
+
 def strategie_modele(modele: dict) -> Strategie:
     def signal(ctx):
         out = np.zeros(ctx["n"], dtype=bool)
@@ -126,8 +137,8 @@ def strategie_modele(modele: dict) -> Strategie:
             p = 1 / (1 + np.exp(-(((X - modele["mu"]) / modele["sd"]) @ modele["w"] + modele["b"])))
             out[idx] = p > modele["seuil"]
         return out
-    return Strategie("Modèle IA (tous les indicateurs et patterns)", "Combinaison",
-                     "Régression logistique qui pèse ensemble les 40 indicateurs et les ~100 figures, "
+    return Strategie(NOM_MODELE, "Combinaison",
+                     "Régression logistique qui pèse ensemble les 41 indicateurs et les 81 figures, "
                      "apprise uniquement sur 2021-2023.", signal, REGLES_MODELE)
 
 
@@ -136,7 +147,7 @@ def strategie_modele(modele: dict) -> Strategie:
 def _passe(bilans_paires: list[dict], rends: list[np.ndarray]) -> bool:
     tous = np.concatenate(rends) if rends else np.zeros(0)
     positives = sum(1 for b in bilans_paires if b["operations"] and b["moyenne_pb"] > 0)
-    return len(tous) >= MIN_OPERATIONS and tous.mean() > 0 and positives >= min(2, len(bilans_paires))
+    return bool(len(tous) >= MIN_OPERATIONS and tous.mean() > 0 and positives >= min(2, len(bilans_paires)))
 
 
 def evaluer(paires=PAIRES, verbose=True) -> dict:

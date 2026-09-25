@@ -104,10 +104,13 @@ def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: R
         fen = sliding_window_view(l, W)[cand + 1]                     # minutes i+1 … i+W
         k = _premier(fen < lim[:, None])
         ok = k < W
+        # Un ordre non servi occupe quand même le robot jusqu'à son annulation (un seul ordre à la fois)
+        rates = cand[~ok]
         cand, lim, k = cand[ok], lim[ok], k[ok]
         ent = cand + 1 + k
         px_in = lim
     else:
+        rates = np.zeros(0, dtype=int)
         ent = cand + 1
         px_in = o[ent]
     base = px_in
@@ -133,12 +136,18 @@ def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: R
                       np.where(motif == STOP, np.where((k_out > 0) & (gap < sl), gap, sl), c[sortie]))
 
     # --- une seule position à la fois : on saute les signaux pendant qu'on est déjà en position ---
+    # (ordres limités non servis compris : ils bloquent jusqu'à leur annulation, minute i+W)
+    tous = np.r_[cand, rates]
+    fins = np.r_[sortie, rates + W]
+    servi = np.r_[np.ones(len(cand), dtype=bool), np.zeros(len(rates), dtype=bool)]
+    ordre = np.argsort(tous, kind="stable")
     garde = np.zeros(len(ent), dtype=bool)
     libre = -1
-    for i in range(len(ent)):
-        if cand[i] > libre:
-            garde[i] = True
-            libre = sortie[i]
+    for i in ordre:
+        if tous[i] > libre:
+            libre = fins[i]
+            if servi[i]:
+                garde[i] = True
     g = garde
     return Trades(cand[g], ent[g], sortie[g], px_in[g], px_out[g], motif[g], r.limite)
 

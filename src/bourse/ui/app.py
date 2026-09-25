@@ -46,7 +46,7 @@ from bourse.execution.cycle import ensure_portfolios, make_broker, portfolio_con
 from bourse.execution.paper_broker import FILLED, PENDING  # noqa: E402
 from bourse.performance.curve import equity_curve  # noqa: E402
 from bourse.strategies import STRATEGIES  # noqa: E402
-from bourse.ui import passe  # noqa: E402
+from bourse.ui import micro, passe  # noqa: E402
 from bourse.ui.alerts_panel import bell, load_panel  # noqa: E402
 from bourse.ui.chart_tools import apply_settings, chart_box, load_toolbar, settings_panel, show  # noqa: E402
 from bourse.ui.tableaux import Cell, Col, glass_table, load_tables  # noqa: E402
@@ -68,7 +68,7 @@ RISK_BADGE = {"faible": "Risque faible", "moyen": "Risque moyen", "élevé": "Ri
               "extrême": "Risque extrême"}
 RISK_LEVEL = {"faible": 1, "moyen": 2, "élevé": 3, "extrême": 4}
 P_RACE, P_ROBOT, P_MARKET, P_MINE, P_ECO = "Course", "Robots", "Marché", "Mon portefeuille", "Éco 1"
-E_PRESENT, E_PAST = "Présent", "Passé"
+E_PRESENT, E_PAST, E_MICRO = "Présent", "Passé", "Micro"
 
 CSS = f"""
 <style>
@@ -607,12 +607,16 @@ if st.session_state.get("page") not in (P_RACE, P_ROBOT, P_MARKET, P_MINE, P_ECO
     st.session_state["page"] = P_RACE
 brand, nav, refresh, bell_col = st.columns([1.4, 6.9, 0.45, 0.5], vertical_alignment="center")
 brand.markdown('<div class="tr-brand">Projet Bourse</div>', unsafe_allow_html=True)
-nav_col, epoch_col = nav.columns([5.1, 1.8], vertical_alignment="center")
+nav_col, epoch_col = nav.columns([4.6, 2.3], vertical_alignment="center")
 # Présent : la course en direct. Passé : les mêmes robots replacés à une date passée (voir ui/passe.py)
-epoch = epoch_col.radio("Époque", [E_PRESENT, E_PAST], horizontal=True, label_visibility="collapsed", key="epoque")
+epoch = epoch_col.radio("Époque", [E_PRESENT, E_PAST, E_MICRO], horizontal=True, label_visibility="collapsed", key="epoque")
 if epoch == E_PRESENT:
     page = nav_col.radio("Aller à", [P_RACE, P_ROBOT, P_MARKET, P_MINE, P_ECO],
                          horizontal=True, label_visibility="collapsed", key="page")
+elif epoch == E_MICRO:
+    page = None
+    nav_col.markdown(f'<span style="color:{MUTED}">Microtrading sur les cryptos · 10 € fictifs par robot'
+                     '</span>', unsafe_allow_html=True)
 else:
     page = None
     nav_col.markdown(f'<span style="color:{MUTED}">Simulation dans le passé · la course du présent continue '
@@ -626,6 +630,10 @@ bell(bell_col.container(key="bellcol"), conn)   # alertes : bouton « globe », 
 st.caption("Argent fictif · cours réels · aucun lien avec un vrai courtier"
            + (" · 👁️ version spectateur : consultation seulement, données mises à jour toutes les 15 min"
               if SPECTATEUR else ""))
+
+if epoch == E_MICRO:
+    micro.render(SimpleNamespace(spectateur=SPECTATEUR, SERIES=SERIES, dark_layout=dark_layout))
+    st.stop()
 
 if epoch == E_PAST:
     passe.render(SimpleNamespace(spectateur=SPECTATEUR,
