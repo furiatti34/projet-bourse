@@ -11,13 +11,22 @@ L'IA choisit alors la répartition, levier et paris à la baisse compris, en exp
 Garde-fous (l'IA ne peut pas les contourner) : placements de l'univers uniquement, 60 % au plus sur un
 seul titre, 50 % au plus en levier ou à la baisse, stop-loss par position entre deux réflexions.
 L'IA tourne sur ce PC (Ollama) : gratuit. Si elle est indisponible, le robot garde ses positions.
+
+Dans l'onglet « Passé », le même code vit à l'heure simulée (bourse.clock) : la date du dossier, les alertes,
+les délais de réflexion suivent l'horloge de la simulation, et la bibliothèque est celle de la simulation, qui ne
+contient que les textes déjà publiés. Si l'IA ne répond pas, la simulation l'attend (au présent, le robot passe
+son tour) : on veut juger les décisions de l'IA, pas une panne du PC.
 """
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+import sqlite3
+import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
+from bourse import clock
 from bourse.config import db_path, load_settings
 from bourse.database import connect
 from bourse.execution.broker import SELL
@@ -28,6 +37,8 @@ from .base import CASH_BUFFER, Strategy
 log = logging.getLogger(__name__)
 
 OLLAMA = "http://localhost:11434"
+SEED = 42            # hasard de l'IA fixé : une simulation relancée à l'identique redonne les mêmes décisions
+PARIS = ZoneInfo("Europe/Paris")
 THEMES = ["perspectives marchés actions récession", "inflation taux banques centrales",
           "or dollar refuge", "dette publique obligations"]
 
@@ -52,12 +63,13 @@ class EcoStrategy(Strategy):
     name = "eco"
     description = ("Boosté à l'IA : lit le climat du marché, les alertes et les économistes, puis choisit "
                    "lui-même sa répartition (levier compris), avec des garde-fous stricts.")
+    on_wait = None       # simulation : fonction appelée (avec un message) pendant qu'on attend l'IA
 
     # ----- le dossier donné à l'IA -----
 
     def dossier(self, broker, state: dict) -> str:
         v = self.view
-        lines = [f"Date : {datetime.now():%d/%m/%Y %H:%M}. {v.headline()}", "", "Signaux du marché :"]
+        lines = [f"Date : {clock.now().astimezone(PARIS):%d/%m/%Y %H:%M}. {v.headline()}", "", "Signaux du marché :"]
         lines += [f"- {f.name} : {f.value * 100:+.0f}/100 — {f.detail}" for f in v.factors]
         lines += ["", "Placements disponibles (ticker | nom | famille | levier | 5j % | 1m % | 3m % | 6m % | "
                       "au-dessus moy. 200j | RSI | vs plus haut 1 an %) :"]
@@ -77,15 +89,23 @@ class EcoStrategy(Strategy):
         return "\n".join(lines)
 
     def economists(self, alerts: list[str]) -> list[str]:
-        """Passages de la bibliothèque sur les grands thèmes du moment (et sur les alertes)."""
+        """Passages de la bibliothèque sur les grands thèmes du moment (et sur les alertes).
+        Simulation : la bibliothèque de la simulation (paramètre `bibliotheque_db`), jamais celle du présent."""
         from bourse.eco import bibliotheque
-        settings = load_settings()
-        conn = connect(db_path(settings))
+        library = self.params.get("bibliotheque_db")
+        if clock.is_simulated() and not library:
+            return ["- bibliothèque indisponible"]   # ne jamais lire la bibliothèque du présent dans le passé
+        if library:
+            conn = sqlite3.connect(f"file:{library}?mode=ro", uri=True, timeout=30)
+            conn.row_factory = sqlite3.Row
+        else:
+            conn = connect(db_path(load_settings()))
         try:
-            bibliotheque.init(conn)
+            if not library:
+                bibliotheque.init(conn)
             seen, out = set(), []
             for query in THEMES + [a.split(" : ", 1)[-1] for a in alerts[-2:]]:
-                for h in bibliotheque.search(conn, query, limit=2):
+                for h in bibliotheque.search(conn, query, limit=2, before=clock.now()):
                     if h["doc_id"] in seen:
                         continue
                     seen.add(h["doc_id"])
@@ -98,10 +118,25 @@ class EcoStrategy(Strategy):
     # ----- l'appel à l'IA -----
 
     def ask_ai(self, dossier: str) -> dict:
+        if not clock.is_simulated():
+            return self._call_ai(dossier, read_timeout=420)
+        # Simulation : on attend l'IA plutôt que de passer son tour (une panne du PC fausserait le résultat).
+        # Délai généreux : l'IA peut être occupée à répondre au robot Éco du présent en même temps.
+        for attempt in range(1, 10_000):
+            try:
+                return self._call_ai(dossier, read_timeout=1800)
+            except Exception as exc:
+                log.warning("IA du Robot Éco indisponible (essai %d) : %s", attempt, exc)
+                if self.on_wait:
+                    self.on_wait(f"En attente de l'IA d'Éco (Ollama est-il lancé ?) — essai {attempt} : {exc}")
+                time.sleep(min(60 * attempt, 600))
+        raise RuntimeError("IA du Robot Éco indisponible")
+
+    def _call_ai(self, dossier: str, read_timeout: int) -> dict:
         model = self.params.get("modele", "qwen3:8b")
-        resp = requests.post(f"{OLLAMA}/api/chat", timeout=(5, 420), json={
-            "model": model, "stream": False, "think": False, "format": SCHEMA,
-            "options": {"num_ctx": 16384, "temperature": 0.3},
+        resp = requests.post(f"{OLLAMA}/api/chat", timeout=(5, read_timeout), json={
+            "model": model, "stream": False, "think": False, "format": SCHEMA, "keep_alive": "30m",
+            "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED},
             "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": dossier}]})
         resp.raise_for_status()
         return json.loads(resp.json()["message"]["content"])
@@ -132,7 +167,7 @@ class EcoStrategy(Strategy):
         self.note("Démarrage : je prépare mon premier dossier pour l'IA.")
 
     def on_alert(self, alert, broker, state):
-        now = datetime.now(timezone.utc)
+        now = clock.now()
         state.setdefault("alertes", []).append(f"{alert.level} {alert.score}/100 ({now:%d/%m %H:%M}) : {alert.title}")
         state["alertes"] = state["alertes"][-15:]
         if alert.level == "FORTE" and self.freshness(alert, now) > 0:
@@ -150,7 +185,7 @@ class EcoStrategy(Strategy):
                 state["force"] = True
 
     def on_cycle(self, broker, state):
-        now = datetime.now(timezone.utc)
+        now = clock.now()
         self.think_climate()
         if self.view is None:
             return

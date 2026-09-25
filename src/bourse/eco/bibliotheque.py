@@ -271,8 +271,10 @@ def _fts_query(text: str) -> str:
     return " OR ".join(f'"{w}"*' if len(w) > 4 else f'"{w}"' for w in dict.fromkeys(words))
 
 
-def search(conn: sqlite3.Connection, query: str, source: str = "", limit: int = 8) -> list[dict]:
-    """Passages les plus pertinents (au plus 2 par article), meilleurs d'abord."""
+def search(conn: sqlite3.Connection, query: str, source: str = "", limit: int = 8,
+           before: datetime | None = None) -> list[dict]:
+    """Passages les plus pertinents (au plus 2 par article), meilleurs d'abord.
+    `before` : seulement les textes publiés avant cette heure (garde-fou des simulations dans le passé)."""
     fts = _fts_query(query)
     if not fts:
         return []
@@ -282,6 +284,9 @@ def search(conn: sqlite3.Connection, query: str, source: str = "", limit: int = 
     if source:
         sql += " AND d.source LIKE ?"
         params.append(f"%{source}%")
+    if before is not None:
+        sql += " AND d.published IS NOT NULL AND d.published <= ?"
+        params.append(before.astimezone(timezone.utc).isoformat(timespec="seconds"))
     sql += " ORDER BY rank LIMIT ?"
     params.append(limit * 4)
     results, per_doc = [], {}

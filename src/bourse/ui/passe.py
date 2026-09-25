@@ -58,7 +58,26 @@ KNOWN_GAPS = [
      "Yahoo recalcule les anciens cours après chaque division de titre (et certains ETF à levier en ont eu "
      "beaucoup) : le prix unitaire peut différer de celui de l'époque, mais les gains et pertes en % sont les "
      "mêmes. Les dividendes ne sont pas versés, comme dans la course du présent."),
-    ("Robot Éco absent", "Exclu pour l'instant (son IA connaît déjà la suite de l'histoire)."),
+]
+# Écarts propres au Robot Éco (affichés seulement quand il fait partie de la simulation)
+ECO_GAPS = [
+    ("Robot Éco : seulement à partir du 1er mai 2025",
+     "Son IA (qwen3) a appris en lisant Internet jusqu'à fin 2024 environ (vérifié : elle connaît des faits de "
+     "septembre 2024, pas l'élection américaine de novembre 2024), et elle est sortie le 29 avril 2025. Après "
+     "cette date, elle ne peut rien savoir de ce qui arrive : elle découvre l'actualité au fil de l'eau, comme au "
+     "présent. Avant, elle connaîtrait la suite : c'est pourquoi Éco ne peut pas remonter plus loin."),
+    ("Robot Éco : bibliothèque d'économistes plus mince",
+     "Éco ne lit que les textes d'économistes déjà publiés à l'heure simulée (date seule connue → lisible le "
+     "lendemain). Mais la bibliothèque a été constituée en 2026 à partir des flux des auteurs, qui ne gardent "
+     "souvent que leurs derniers articles : en 2025, Éco dispose donc de moins d'avis (2 à 13 textes par mois "
+     "jusqu'à septembre 2025, puis bien davantage) qu'il n'en aurait eu en suivant ces auteurs à l'époque."),
+    ("Robot Éco : textes dans leur version actuelle",
+     "Les textes des économistes ont été téléchargés en 2025-2026 : si un auteur a corrigé son article après "
+     "l'avoir publié, Éco lit la version corrigée. C'est rare et limité à des retouches."),
+    ("Robot Éco : l'IA est attendue",
+     "Au présent, si l'IA ne répond pas (Ollama fermé), Éco passe son tour. Dans le passé, la simulation "
+     "l'attend : on juge ses décisions, pas les pannes du PC. Le hasard de l'IA est fixé (au présent aussi) : "
+     "une simulation relancée à l'identique redonne les mêmes décisions."),
 ]
 
 
@@ -73,6 +92,14 @@ def _long_date(iso: str) -> str:
     return f"{DAYS[t.weekday()]} {t.day} {MONTHS[t.month - 1]} {t.year}, {t:%H}h{t:%M}"
 
 
+def _duration(minutes: float) -> str:
+    if minutes < 90:
+        return f"{max(1, round(minutes))} min"
+    if minutes < 48 * 60:
+        return f"{minutes / 60:.0f} h"
+    return f"{minutes / 60 / 24:.1f} jours".replace(".", ",")
+
+
 def _label(path: Path, info: dict) -> str:
     start, end = date.fromisoformat(info["debut"]), date.fromisoformat(info["fin"])
     return (f"{start:%d/%m/%Y} → {end:%d/%m/%Y} · {len(info.get('robots', []))} robots · "
@@ -84,7 +111,8 @@ def render(ui) -> None:
     st.title("Le passé")
     st.caption("Les mêmes robots, replacés à une date passée, sur les vrais cours et les actualités de "
                "l'époque. Ils ne connaissent jamais la suite : chaque cours, chaque article ne leur parvient "
-               "qu'à l'heure où il a été publié. Des années de Bourse se jouent en quelques minutes.")
+               "qu'à l'heure où il a été publié. Des années de Bourse se jouent en quelques minutes (des jours "
+               "avec le Robot Éco, dont l'IA prend le temps de réfléchir).")
 
     robots = [name for name, cfg in ui.configs.items() if cfg.get("strategie") in sim.ROBOTS_ALLOWED]
     spectateur = getattr(ui, "spectateur", False)   # site en ligne : on regarde, on ne lance rien
@@ -104,14 +132,27 @@ def render(ui) -> None:
             end = c2.date_input("Arrivée", min(start + timedelta(days=365), today - timedelta(days=1)),
                                 min_value=start + timedelta(days=7), max_value=today - timedelta(days=1),
                                 format="DD/MM/YYYY", key="sim_end")
-            chosen = c3.multiselect("Robots", robots, default=robots, key="sim_robots",
-                                    format_func=lambda n: n.replace("Robot ", ""))
-            years = max((end - start).days / 365, 0.02)
-            st.caption(f"Durée estimée : environ {max(1, round(years * 1.5))} min de calcul pour "
-                       f"{(end - start).days} jours simulés, plus le téléchargement des actualités d'époque "
-                       "s'il en manque (quelques secondes par jour manquant). Vous pouvez quitter la page : "
-                       "la simulation continue.")
-            if st.button("Remonter le temps", type="primary", icon=":material/history:", disabled=not chosen):
+            eco_names = [n for n in robots if sim.uses_eco(ui.configs[n])]
+            chosen = c3.multiselect("Robots", robots, default=[n for n in robots if n not in eco_names],
+                                    key="sim_robots", format_func=lambda n: n.replace("Robot ", ""))
+            with_eco = any(n in eco_names for n in chosen)
+            eco_blocked = with_eco and start < sim.ECO_DEBUT
+            if eco_blocked:
+                st.warning(f"Le Robot Éco ne peut partir qu'à partir du {sim.ECO_DEBUT:%d/%m/%Y}. Son IA a appris "
+                           "en lisant Internet jusqu'à fin 2024 environ : placée plus tôt, elle connaîtrait déjà la "
+                           "suite (Covid, guerre en Ukraine, inflation…). Choisissez un départ plus récent, ou "
+                           "retirez Éco.", icon=":material/block:")
+            elif with_eco:
+                st.info("🧠 Avec le Robot Éco, la simulation est longue : son IA réfléchit environ 2 minutes toutes "
+                        "les 4 heures simulées, exactement comme au présent. Elle tourne en arrière-plan ; laissez le "
+                        "PC allumé (il ne se met plus en veille tout seul pendant ce temps). S'il redémarre, la "
+                        "simulation reprend d'elle-même dans le quart d'heure. Ollama doit être lancé.")
+            minutes = sim.estimated_minutes(start, end, with_eco)
+            st.caption(f"Durée estimée : environ {_duration(minutes)} de calcul pour {(end - start).days} jours "
+                       "simulés, plus le téléchargement des actualités d'époque s'il en manque (quelques secondes "
+                       "par jour manquant). Vous pouvez quitter la page : la simulation continue.")
+            if st.button("Remonter le temps", type="primary", icon=":material/history:",
+                         disabled=not chosen or eco_blocked):
                 path = sim.create(start, end, chosen)
                 sim.launch(path)
                 st.session_state["sim_selected"] = path.name
@@ -159,8 +200,12 @@ def show_simulation(ui, conn: sqlite3.Connection, path: Path) -> None:
                         unsafe_allow_html=True)
             st.progress(progress, text=f"{STATUS.get(status, status)} · {progress:.0%} · {info.get('message', '')}")
             if info.get("duree_s"):
-                st.caption(f"Calcul : {info['duree_s'] / 60:.1f} min · {info.get('alertes', 0)} alerte(s) déclenchée(s)"
-                           " par la veille d'époque")
+                spent = info["duree_s"] / 60
+                left_txt = ""
+                if status == "en_cours" and 0.002 < progress < 1:
+                    left_txt = f" · reste environ {_duration(spent * (1 - progress) / progress)}"
+                st.caption(f"Calcul : {_duration(spent)}{left_txt} · {info.get('alertes', 0)} alerte(s) "
+                           "déclenchée(s) par la veille d'époque")
         with right:
             if getattr(ui, "spectateur", False):
                 pass   # site en ligne : ni arrêt ni relance
@@ -307,7 +352,9 @@ def _gaps(info: dict) -> None:
     with st.expander("Tous les écarts avec la course du présent (à lire)", icon=":material/rule:"):
         st.caption("La simulation fait tourner exactement le même code que le présent. Voici tout ce qui "
                    "diffère malgré tout, et pourquoi.")
-        for title, text in KNOWN_GAPS:
+        with_eco = any(sim.uses_eco(p) for p in (info.get("reglages") or {}).get("paper_trading", {})
+                       .get("portefeuilles", []))
+        for title, text in KNOWN_GAPS + (ECO_GAPS if with_eco else []):
             st.markdown(f"**{title}.** {text}")
         extra = info.get("ecarts") or []
         if extra:

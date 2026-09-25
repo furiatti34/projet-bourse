@@ -11,6 +11,12 @@ Déroulement, toutes les 15 minutes simulées (comme la veille automatique du pr
   3. chaque robot fait son passage (analyse du marché, alertes, décisions) ;
   4. les ordres en attente sont exécutés au premier cours publié après leur création.
 
+Le Robot Éco (IA) : son IA a appris sur des textes allant jusqu'à fin 2024 environ, et elle est sortie le
+29 avril 2025 : elle ne peut rien savoir d'après. Il n'est donc simulé qu'à partir du 1er mai 2025 (ECO_DEBUT),
+sinon il connaîtrait déjà la suite de l'histoire. Sa bibliothèque d'économistes se remplit au fil du temps
+simulé, texte par texte, à l'heure de publication. Une simulation avec Éco dure des jours (l'IA réfléchit
+~2 min toutes les 4 h simulées) : elle reprend d'elle-même après une coupure (voir `resume_orphans`).
+
 Lancement : python -m bourse.backtest.simulation <fichier .db de la simulation>
 """
 import json
@@ -41,7 +47,11 @@ log = logging.getLogger(__name__)
 
 SIM_DIR = PROJECT_ROOT / "data" / "simulations"
 STEP = timedelta(minutes=15)
-ROBOTS_ALLOWED = ("prudent", "opportuniste", "audacieux", "kamikaze")   # Éco : plus tard
+ROBOTS_ALLOWED = ("prudent", "opportuniste", "audacieux", "kamikaze", "eco")
+# Le Robot Éco ne remonte pas avant la sortie de son IA (qwen3, 29/04/2025) : elle connaîtrait la suite.
+ECO_DEBUT = date(2025, 5, 1)
+ECO_SECONDES_PAR_REFLEXION = 110   # mesuré sur ce PC (qwen3:8b) : sert à estimer la durée
+LIBRARY_DB = PROJECT_ROOT / "data" / "bourse.db"   # bibliothèque d'Éco 1 du présent (lue, jamais modifiée)
 
 INFO_SCHEMA = "CREATE TABLE IF NOT EXISTS simulation (cle TEXT PRIMARY KEY, valeur TEXT)"
 
@@ -68,7 +78,7 @@ def open_sim(path: Path) -> sqlite3.Connection:
 
 
 def sim_settings(settings: dict, robots: list[str]) -> dict:
-    """Les réglages du présent, avec seulement les robots choisis (Éco et le portefeuille manuel exclus)."""
+    """Les réglages du présent, avec seulement les robots choisis (le portefeuille manuel exclu)."""
     s = json.loads(json.dumps(settings))
     s["paper_trading"]["portefeuilles"] = [p for p in s["paper_trading"]["portefeuilles"]
                                            if str(p.get("strategie")).removeprefix("labo_") in ROBOTS_ALLOWED
@@ -81,6 +91,10 @@ def create(start: date, end: date, robots: list[str], settings: dict | None = No
     """Prépare une nouvelle simulation (elle démarre avec `launch`).
     `settings` déjà préparés (ex. version labo des robots) : utilisés tels quels.
     download_news=False : n'utilise que les actualités déjà téléchargées (tests du labo)."""
+    settings = settings or load_settings()
+    if start < ECO_DEBUT and any(p["nom"] in robots and uses_eco(p) for p in settings["paper_trading"]["portefeuilles"]):
+        raise ValueError(f"Le Robot Éco ne peut pas partir avant le {ECO_DEBUT:%d/%m/%Y} : son IA connaît "
+                         "déjà ce qui s'est passé avant.")
     folder = folder or SIM_DIR
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -89,10 +103,24 @@ def create(start: date, end: date, robots: list[str], settings: dict | None = No
     conn = open_sim(path)
     set_info(conn, debut=start.isoformat(), fin=end.isoformat(), robots=robots, statut="en_attente",
              progression=0.0, message="En attente du démarrage", cree_le=datetime.now(timezone.utc).isoformat(),
-             reglages=sim_settings(settings or load_settings(), robots), ecarts=[],
+             reglages=sim_settings(settings, robots), ecarts=[],
              telecharger_actualites=download_news)
     conn.close()
     return path
+
+
+def uses_eco(portfolio_cfg: dict) -> bool:
+    return str(portfolio_cfg.get("strategie", "")).removeprefix("labo_") == "eco"
+
+
+def estimated_minutes(start: date, end: date, with_eco: bool) -> float:
+    """Durée de calcul estimée. Sans Éco : ~1,5 min par année. Avec Éco : une réflexion de l'IA toutes les
+    4 h simulées (6 par jour, week-ends compris, comme au présent), plus ~15 % après les alertes fortes."""
+    days = max((end - start).days, 1)
+    minutes = days / 365 * 1.5
+    if with_eco:
+        minutes += days * 6 * 1.15 * ECO_SECONDES_PAR_REFLEXION / 60
+    return minutes
 
 
 def launch(path: Path) -> None:
@@ -105,7 +133,10 @@ def launch(path: Path) -> None:
     subprocess.Popen([str(python if python.exists() else sys.executable), "-m", "bourse.backtest.simulation",
                       str(path)], cwd=PROJECT_ROOT, stdout=log_file, stderr=subprocess.STDOUT,
                      stdin=subprocess.DEVNULL, creationflags=flags, close_fds=True,
-                     env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src"), "PYTHONIOENCODING": "utf-8"})
+                     # PYTHONHASHSEED fixé : même ordre de parcours des ensembles d'un lancement à l'autre, donc
+                     # une simulation relancée à l'identique passe ses ordres dans le même ordre
+                     env={**os.environ, "PYTHONPATH": str(PROJECT_ROOT / "src"), "PYTHONIOENCODING": "utf-8",
+                          "PYTHONHASHSEED": "0"})
 
 
 def list_simulations() -> list[tuple[Path, dict]]:
@@ -203,6 +234,105 @@ class SimWatch:
         return raised
 
 
+# ---------------------------------------------------------------- la bibliothèque d'Éco, au fil du temps
+
+def library_available(published: str) -> datetime:
+    """Heure à partir de laquelle un texte de la bibliothèque est lisible : son heure de publication ; si seule
+    la date est connue (00:00:00), le lendemain à 00:00 UTC, pour ne jamais le montrer trop tôt."""
+    t = datetime.fromisoformat(published)
+    return t + timedelta(days=1) if (t.hour, t.minute, t.second) == (0, 0, 0) else t
+
+
+class SimLibrary:
+    """Copie la bibliothèque du présent dans la base de la simulation, texte par texte, quand il devient lisible.
+    La recherche (et son classement) ne porte donc que sur ce qui existait à l'heure simulée."""
+
+    def __init__(self, conn: sqlite3.Connection, source: Path = LIBRARY_DB):
+        from bourse.eco import bibliotheque
+        self.conn, self.bib = conn, bibliotheque
+        bibliotheque.init(conn)
+        self.docs: list[tuple[datetime, dict]] = []
+        if source.exists():
+            live = sqlite3.connect(f"file:{source}?mode=ro", uri=True, timeout=30)
+            live.row_factory = sqlite3.Row
+            try:
+                rows = live.execute("SELECT url, title, author, source, lang, published, text FROM eco_docs"
+                                    " WHERE published IS NOT NULL").fetchall()
+            except sqlite3.Error:
+                rows = []
+            live.close()
+            self.docs = sorted(((library_available(r["published"]), dict(r)) for r in rows), key=lambda x: x[0])
+
+    def add_until(self, t: datetime) -> int:
+        """Ajoute tous les textes devenus lisibles jusqu'à `t` (ceux déjà présents sont ignorés)."""
+        n = 0
+        while self.docs and self.docs[0][0] <= t:
+            _, d = self.docs.pop(0)
+            self.bib._store(self.conn, {"nom": d["source"], "langue": d["lang"]}, d["url"], d["title"], d["author"],
+                            d["published"], d["text"])
+            n += 1
+        if n:
+            self.conn.commit()
+        return n
+
+
+# ---------------------------------------------------------------- reprise après une coupure
+
+def _pid_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    if sys.platform != "win32":
+        import os
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+    import ctypes
+    handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))   # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return False
+    code = ctypes.c_ulong()
+    ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(code))
+    ctypes.windll.kernel32.CloseHandle(handle)
+    return code.value == 259   # STILL_ACTIVE
+
+
+def resume_orphans() -> list[str]:
+    """Relance les simulations interrompues (PC redémarré, programme fermé…). Appelé par la veille automatique."""
+    relaunched = []
+    for path, info in list_simulations():
+        status = info.get("statut")
+        if status not in ("preparation", "en_cours", "arret_demande") or _pid_alive(info.get("pid")):
+            continue
+        conn = open_sim(path)
+        if status == "arret_demande":
+            set_info(conn, statut="arretee", message="Arrêtée à la demande")
+        else:
+            set_info(conn, pid=None, message="Reprise après une interruption…")
+            launch(path)
+            relaunched.append(path.name)
+        conn.close()
+    return relaunched
+
+
+def _keep_awake() -> None:
+    """Empêche la mise en veille automatique du PC tant que la simulation tourne (Windows)."""
+    if sys.platform == "win32":
+        import ctypes
+        ctypes.windll.kernel32.SetThreadExecutionState(0x80000000 | 0x00000001)   # CONTINUOUS | SYSTEM_REQUIRED
+
+
+def _reset(conn: sqlite3.Connection) -> None:
+    """Départ de zéro : efface ce qu'un démarrage interrompu aurait pu laisser."""
+    for table in ("orders", "snapshots", "journal", "alerts", "articles", "portfolios", "eco_docs", "eco_fts"):
+        try:
+            conn.execute(f"DELETE FROM {table}")
+        except sqlite3.OperationalError:
+            pass   # table pas encore créée
+    conn.commit()
+
+
 # ---------------------------------------------------------------- la simulation
 
 def _grid(start: datetime, end: datetime) -> list[datetime]:
@@ -228,11 +358,24 @@ def run(path: Path) -> None:
     start = datetime(start_day.year, start_day.month, start_day.day, tzinfo=timezone.utc)
     end = min(datetime(end_day.year, end_day.month, end_day.day, 23, 45, tzinfo=timezone.utc),
               datetime.now(timezone.utc) - timedelta(hours=1))
-    t_begin = time.monotonic()
-    ecarts: list[str] = []
+    import os
+    has_eco = any(uses_eco(p) for p in settings["paper_trading"]["portefeuilles"])
+    # Reprise au quart d'heure près : seulement avec Éco (sans lui, une simulation dure quelques minutes et
+    # recommence simplement du début).
+    resume_from = datetime.fromisoformat(info["dernier_pas"]) if has_eco and info.get("dernier_pas") else None
+    t_begin = time.monotonic() - float(info.get("duree_s") or 0)
+    ecarts: list[str] = list(info.get("ecarts") or []) if resume_from else []
+    set_info(conn, pid=os.getpid())
+    _keep_awake()
 
     def status(**values):
         set_info(conn, **values)
+
+    from bourse.strategies.eco import EcoStrategy
+    EcoStrategy.on_wait = lambda text: status(message=text)
+    for p in settings["paper_trading"]["portefeuilles"]:
+        if uses_eco(p):   # Éco lit la bibliothèque de la simulation, jamais celle du présent
+            p.setdefault("parametres", {})["bibliotheque_db"] = str(path)
 
     if any(str(p.get("strategie", "")).startswith("labo_") for p in settings["paper_trading"]["portefeuilles"]):
         from bourse import labo
@@ -242,7 +385,7 @@ def run(path: Path) -> None:
     market = build_market(settings)
     ecarts += [f"Cours corrigé : {n}" for n in market.notes]
     missing = [u["nom"] for u in settings["analyse"]["univers"] if not market.listed_at(u["ticker"], start)]
-    if missing:
+    if missing and not resume_from:
         ecarts.append(f"{len(missing)} placements n'existaient pas encore au départ (ils apparaîtront à leur "
                       f"création) : {', '.join(missing)}")
     prices.set_provider(market)
@@ -263,13 +406,26 @@ def run(path: Path) -> None:
     coverage = actualites.coverage_report(archive, settings, start_day, end_day)
     status(couverture=coverage)
 
-    # 3. Départ
-    clock.set_simulated(start)
+    # 3. Départ (ou reprise là où la simulation s'était arrêtée)
+    first = resume_from + STEP if resume_from else start
+    if not resume_from:
+        _reset(conn)
+    clock.set_simulated(first)
     watch = SimWatch(settings)
-    before = actualites.articles_between(archive, datetime(1990, 1, 1, tzinfo=timezone.utc), start)
-    before = [(a, seen) for a, seen in before if seen >= datetime.combine(news_from, datetime.min.time(), timezone.utc)]
+    earliest = datetime.combine(news_from, datetime.min.time(), timezone.utc)
+    if resume_from:   # la veille ne regarde que les dernières 24 h : on lui rend ce qu'elle avait sous les yeux
+        earliest = max(earliest, first - timedelta(hours=settings["veille"]["fenetre_heures"] + 2))
+        ecarts.append(f"Simulation interrompue puis reprise d'elle-même à l'heure simulée {first:%d/%m/%Y %H:%M} UTC "
+                      f"(le {datetime.now():%d/%m/%Y à %H:%M}, heure réelle). Rien n'est perdu ; au pire, le dernier "
+                      "quart d'heure simulé a été rejoué.")
+    before = actualites.articles_between(archive, datetime(1990, 1, 1, tzinfo=timezone.utc), first)
+    before = [(a, seen) for a, seen in before if seen >= earliest]
     _save_articles(conn, before)
     watch.add([a for a, _ in before])
+    library = None
+    if has_eco:
+        library = SimLibrary(conn)
+        library.add_until(first)
     portfolios = {p["name"]: p for p in ensure_portfolios(conn, settings)}
     configs = portfolio_configs(settings)
     fees = settings["paper_trading"]["frais"]
@@ -280,19 +436,23 @@ def run(path: Path) -> None:
     watch_times = {_ceil(t) for t in market.event_times(indicators, start, end)}
     snapshot_times = {_ceil(t) for t in market.event_times([settings["general"]["indice_reference"]], start, end)}
 
-    steps = _grid(start, end)
-    status(statut="en_cours", message="Les robots sont au travail", ecarts=ecarts, heure_simulee=start.isoformat())
-    last_seen = start
+    all_steps = _grid(start, end)
+    steps = [t for t in all_steps if t >= first]
+    done = len(all_steps) - len(steps)
+    status(statut="en_cours", message="Les robots sont au travail", ecarts=ecarts, heure_simulee=first.isoformat())
+    last_seen = first
     view_cache: dict = {}
-    n_alerts = 0
-    for i, t in enumerate(steps):
+    n_alerts = int(info.get("alertes") or 0) if resume_from else 0
+    for i, t in enumerate(steps, start=done):
         clock.set_simulated(t)
-        # 1. nouveaux articles visibles
+        # 1. nouveaux articles visibles (et nouveaux textes d'économistes)
         new = actualites.articles_between(archive, last_seen, t)
         last_seen = t
         if new:
             _save_articles(conn, new)
             watch.add([a for a, _ in new])
+        if library:
+            library.add_until(t)
         # 2. la veille
         alerts = watch.run(conn) if (new or t in watch_times) else []
         n_alerts += len(alerts)
@@ -309,17 +469,18 @@ def run(path: Path) -> None:
             notes += broker.process_pending()
             if notes:
                 write_journal(conn, p["id"], notes)
-            if t in snapshot_times or i == 0 or i == len(steps) - 1:
+            if t in snapshot_times or i == 0 or i == len(all_steps) - 1:
                 _snapshot(conn, row, broker)
-        # 4. avancement (et arrêt demandé depuis l'interface ?)
-        if i % 96 == 0 or i == len(steps) - 1:
+        # 4. avancement (et arrêt demandé depuis l'interface ?). Avec Éco, un passage peut durer des minutes :
+        # l'état est alors enregistré à chaque passage (reprise possible au quart d'heure près).
+        if library or i % 96 == 0 or i == len(all_steps) - 1:
             stop = conn.execute("SELECT valeur FROM simulation WHERE cle = 'statut'").fetchone()
             if stop and json.loads(stop[0]) == "arret_demande":
                 status(statut="arretee", message=f"Arrêtée à la demande le {t:%d/%m/%Y}", heure_simulee=t.isoformat(),
-                       duree_s=time.monotonic() - t_begin)
+                       duree_s=time.monotonic() - t_begin, dernier_pas=t.isoformat())
                 return
-            status(progression=(i + 1) / len(steps), heure_simulee=t.isoformat(), alertes=n_alerts,
-                   duree_s=time.monotonic() - t_begin)
+            status(progression=(i + 1) / len(all_steps), heure_simulee=t.isoformat(), alertes=n_alerts,
+                   duree_s=time.monotonic() - t_begin, dernier_pas=t.isoformat(), message="Les robots sont au travail")
     status(statut="terminee", progression=1.0, message="Simulation terminée", heure_simulee=end.isoformat(),
            alertes=n_alerts, duree_s=time.monotonic() - t_begin)
 
