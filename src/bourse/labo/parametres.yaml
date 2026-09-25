@@ -4,6 +4,7 @@ prudent:
   lissage_jours: 5      # carnet n°4 : note de climat moyenne sur 5 jours
 opportuniste:
   reserve_une_mise: true   # carnet n°5 : hors tempête, une seule mise gardée en liquide
+  soldes_si_monde_haussier: true   # carnet n°13 : pas de soldes quand le marché mondial est sous sa moyenne 200 jours
 audacieux:
   marge_posture: 10     # carnet n°6 : marge de 10 points avant de quitter une posture
   garder_rang: 5        # carnet n°2 : garde son marché d'accompagnement tant qu'il est dans le top 5 (1 au présent)

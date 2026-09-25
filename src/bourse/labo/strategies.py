@@ -25,6 +25,19 @@ class _ScoreOverride:
         return getattr(self._view, name)
 
 
+class _Filtered:
+    """L'analyse du marché, en ne proposant que les placements qui passent un filtre (voir carnet n°17)."""
+
+    def __init__(self, view, keep):
+        self._view, self._keep = view, keep
+
+    def pick(self, *args, **kwargs):
+        return [a for a in self._view.pick(*args, **kwargs) if self._keep(a)]
+
+    def __getattr__(self, name):
+        return getattr(self._view, name)
+
+
 class LabPrudent(PrudentStrategy):
     name = "labo_prudent"
 
@@ -54,6 +67,11 @@ class LabPrudent(PrudentStrategy):
             self.think(f"Le marché mondial est en tendance haussière : au moins {floor:.0%} d'actions.")
         targets = super().targets(state)
         p = self.params
+        gold = self.view.asset(p["titre_refuge"])
+        if p.get("or_tendance") and gold is not None and not gold.above_ma200 and p["titre_refuge"] in targets:
+            share = targets.pop(p["titre_refuge"])   # carnet n°16 : or seulement s'il est en tendance haussière
+            targets[p["titre_monetaire"]] = round(targets.get(p["titre_monetaire"], 0) + share, 3)
+            self.think("L'or est sous sa moyenne 200 jours : je le remplace par le placement sans risque.")
         bonds = self.view.asset(p["titre_obligations"])
         if p.get("obligations_tendance") and bonds is not None and not bonds.above_ma200:
             share = targets.pop(p["titre_obligations"], 0)
@@ -87,6 +105,15 @@ class LabOpportuniste(OpportunisteStrategy):
         world = self.view.asset(self.params["titre_coeur"])
         if self.params.get("soldes_si_monde_haussier") and world is not None and not world.above_ma200:
             self.think("Le marché mondial est sous sa moyenne 200 jours : je ne cherche pas de soldes.")
+            return
+        floor = self.params.get("soldes_chute_max")
+        if floor is not None:   # carnet n°17 : pas de « solde » sur un placement effondré (couteau qui tombe)
+            original = self.view
+            self.view = _Filtered(original, lambda a: a.drawdown >= floor)
+            try:
+                super().hunt_sales(broker, state)
+            finally:
+                self.view = original
             return
         super().hunt_sales(broker, state)
 
@@ -144,6 +171,13 @@ class LabAudacieux(AudacieuxStrategy):
         return mode
 
     def targets(self, mode: str) -> dict[str, float]:
+        if mode == BEAR and self.params.get("baisse_en_liquide"):
+            # carnet n°18 : en posture « baisse », tout au placement sans risque au lieu du pari à la baisse ×2
+            self.think("Posture baisse : je me mets à l'abri dans le placement sans risque, sans pari à la baisse.")
+            return {self.params["titre_monetaire"]: round(1 - CASH_BUFFER, 3)}
+        return self._targets(mode)
+
+    def _targets(self, mode: str) -> dict[str, float]:
         """Carnet n°2 : en posture neutre, le marché d'accompagnement (50 %) est gardé tant qu'il reste dans
         le top `garder_rang` de l'élan (1 au présent : il changeait dès qu'un autre passait devant)."""
         keep_rank = int(self.params.get("garder_rang", 1))
