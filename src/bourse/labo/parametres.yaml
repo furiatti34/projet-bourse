@@ -9,4 +9,5 @@ audacieux:
   marge_posture: 10     # carnet n°6 : marge de 10 points avant de quitter une posture
   garder_rang: 5        # carnet n°2 : garde son marché d'accompagnement tant qu'il est dans le top 5 (1 au présent)
 kamikaze:
+  baisse_si_tempete: true   # carnet n°22 : paris à la baisse seulement quand le climat est à la tempête
   garder_rang: 5        # carnet n°1 : garde un placement tant qu'il est dans le top 5 (2 au présent)
