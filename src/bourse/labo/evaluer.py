@@ -73,13 +73,19 @@ def metrics(path: Path) -> dict:
         fees, trades = conn.execute("SELECT COALESCE(SUM(fees_eur), 0), COUNT(*) FROM orders WHERE portfolio_id = ?"
                                     " AND status = 'EXECUTE'", (pid,)).fetchone()
         perf = v.iloc[-1] / cash - 1
+        # Contrôle ajouté le 27/09 : un robot qui plante à chaque passage ne passe aucun ordre et semble
+        # « prudent » ; ses erreurs sont comptées pour ne jamais confondre une panne avec un résultat.
+        errors = conn.execute("SELECT COUNT(*) FROM journal WHERE portfolio_id = ? AND message LIKE 'Erreur du robot%'",
+                              (pid,)).fetchone()[0]
         out[name] = {
             "perf_pct": round(perf * 100, 2),
             "par_an_pct": round(((1 + perf) ** (1 / years) - 1) * 100, 2),
             "indice_pct": round((b.iloc[-1] / b.iloc[0] - 1) * 100, 2),
             "chute_max_pct": round(((v / v.cummax()) - 1).min() * 100, 2),
-            "frais_eur": round(fees), "ordres": trades,
+            "frais_eur": round(fees), "ordres": trades, "erreurs": errors,
         }
+        if errors:
+            out[name]["ATTENTION"] = f"{errors} erreurs du robot : résultat INVALIDE"
     return out
 
 

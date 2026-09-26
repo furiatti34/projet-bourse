@@ -6,7 +6,7 @@ en surchargeant une méthode, avec un commentaire qui renvoie au numéro du carn
 from datetime import datetime, timedelta
 
 from bourse import clock
-from bourse.strategies.audacieux import ATTACK, BEAR, NASDAQ, NEUTRAL, AudacieuxStrategy
+from bourse.strategies.audacieux import ATTACK, BEAR, CRISIS, NASDAQ, NEUTRAL, AudacieuxStrategy
 from bourse.execution.broker import SELL
 from bourse.execution.paper_broker import FILLED
 from bourse.strategies.base import CASH_BUFFER
