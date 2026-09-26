@@ -38,10 +38,23 @@ def ecart(d: dict[str, np.ndarray]) -> np.ndarray:
     return np.clip(med.ffill().to_numpy(), 0, 0.05)
 
 
-def glissement(d: dict[str, np.ndarray]) -> np.ndarray:
-    """Glissement d'un ordre au marché, minute par minute : la moitié de l'écart, au moins le plancher."""
-    e = ecart(d)
-    return np.maximum(PLANCHER, np.nan_to_num(e / 2, nan=PLANCHER))
+# Écart achat/vente MOYEN relevé en direct (API publique « bookTicker »), 26/09/2026, ~45 min à ~10 h de
+# relevés selon la paire (data/micro/calibration/ et table « releves » du paper trading).
+# Pourquoi : l'estimation par les volumes (ci-dessus) marche sur les paires actives, mais sur les paires
+# peu actives elle trouve souvent 0 alors que l'écart réel est de 0,03 à 0,12 % (trop peu de transactions
+# des deux côtés dans la même minute). On prend donc le PLUS GRAND des deux.
+# Limite connue : l'écart d'aujourd'hui n'est pas forcément celui de 2021 ; LUNA n'existe plus (valeur supposée).
+ECART_OBSERVE = {"BTCEUR": 0.0000, "ETHEUR": 0.0008e-2, "SOLEUR": 0.0105e-2, "XRPEUR": 0.0126e-2,
+                 "ADAEUR": 0.0850e-2, "DOGEEUR": 0.0318e-2, "DOTEUR": 0.1186e-2, "AVAXEUR": 0.0760e-2,
+                 "LUNAEUR": 0.05e-2}
+
+
+def glissement(d: dict[str, np.ndarray], paire: str | None = None) -> np.ndarray:
+    """Glissement d'un ordre au marché, minute par minute : la moitié de l'écart (le plus grand de
+    l'estimé et de l'observé en direct), au moins le plancher."""
+    e = np.nan_to_num(ecart(d), nan=0.0)
+    e = np.maximum(e, ECART_OBSERVE.get(paire, 0.0))
+    return np.maximum(PLANCHER, e / 2)
 
 
 # Règles de quantité de Binance (relevées le 26/09/2026 sur l'API publique « exchangeInfo »).

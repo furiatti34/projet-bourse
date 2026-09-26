@@ -197,7 +197,7 @@ class Robot:
         s = self.charger(conn)
         sig = self.strategie.signal(ctx)
         self._atr = ctx["f"]["atr"]
-        self._gl = glissement(d)
+        self._gl = glissement(d, self.paire)
         self._cot = cot
         self._dernier = len(d["t"]) - 1 if cot else -1     # seule la dernière minute close est « observée »
         t = d["t"]

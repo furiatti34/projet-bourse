@@ -128,7 +128,8 @@ def charger_modele(fichier: str = "modele.json") -> dict:
     return m
 
 
-def strategie_modele(modele: dict) -> Strategie:
+def strategie_modele(modele: dict, regles: Regles = REGLES_MODELE, nom: str = NOM_MODELE,
+                     description: str | None = None) -> Strategie:
     def signal(ctx):
         out = np.zeros(ctx["n"], dtype=bool)
         for i in range(0, ctx["n"], 400_000):                     # par morceaux (mémoire)
@@ -137,9 +138,9 @@ def strategie_modele(modele: dict) -> Strategie:
             p = 1 / (1 + np.exp(-(((X - modele["mu"]) / modele["sd"]) @ modele["w"] + modele["b"])))
             out[idx] = p > modele["seuil"]
         return out
-    return Strategie(NOM_MODELE, "Combinaison",
+    return Strategie(nom, "Combinaison", description or
                      "Régression logistique qui pèse ensemble les 41 indicateurs et les 81 figures, "
-                     "apprise uniquement sur 2021-2023.", signal, REGLES_MODELE)
+                     "apprise uniquement sur 2021-2023.", signal, regles)
 
 
 # ------------------------------------------------------------------ banc d'essai
@@ -171,7 +172,7 @@ def evaluer(paires=PAIRES_BANC, verbose=True) -> dict:
     for p in paires:
         ctx = contexte(donnees.charger(p, PERIODES["entrainement"][0]))
         d = ctx["d"]
-        gl = couts.glissement(d)
+        gl = couts.glissement(d, p)
         fin_donnees[p] = datetime.fromtimestamp(d["t"][-1], timezone.utc).isoformat()
         for per, (a, b) in PERIODES.items():
             jours[per, p] = max(0.0, (min(ts(b), d["t"][-1]) - max(ts(a), d["t"][0])) / 86400)

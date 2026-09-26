@@ -7,6 +7,7 @@ import json
 import sqlite3
 from datetime import datetime, timezone
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -92,11 +93,46 @@ def _direct(ui) -> None:
                 "Résultat (frais compris)": (t["rendement"] * 100).map(lambda v: f"{v:+.3f} %"),
                 "Capital": t["capital_apres"].map(lambda v: f"{v:.4f} €")}),
                 hide_index=True, use_container_width=True)
+        _comparaison(base)
         with st.expander("Journal des robots"):
             for _, j in journal.iterrows():
                 st.text(f"{j['t'][5:16].replace('T', ' ')}  {j['robot'] or '—'} : {j['message']}")
 
     live()
+
+
+def _comparaison(base) -> None:
+    """Chaque exécution simulée, comparée aux vrais prix acheteur/vendeur relevés au même moment."""
+    conn = sqlite3.connect(f"file:{base}?mode=ro", uri=True, timeout=10)
+    try:
+        ex = pd.read_sql("SELECT * FROM executions ORDER BY id DESC", conn)
+        rel = pd.read_sql("SELECT paire, (ask - bid) / ((ask + bid) / 2) AS ecart FROM releves", conn)
+    except Exception:
+        return
+    finally:
+        conn.close()
+    with st.expander("Simulation contre marché réel (prix acheteur/vendeur observés)"):
+        if len(rel):
+            e = rel.groupby("paire")["ecart"].agg(["mean", "median", "max", "count"]).reset_index()
+            st.caption("Écart entre le meilleur prix vendeur et le meilleur prix acheteur, relevé à chaque minute :")
+            st.dataframe(pd.DataFrame({"Paire": e["paire"], "Écart moyen": (e["mean"] * 100).map("{:.4f} %".format),
+                                       "Médian": (e["median"] * 100).map("{:.4f} %".format),
+                                       "Maximum": (e["max"] * 100).map("{:.4f} %".format),
+                                       "Relevés": e["count"]}), hide_index=True, use_container_width=True)
+        if not len(ex):
+            st.caption("Pas encore d'exécution au marché comparable (il faut que le PC soit allumé au moment du signal).")
+            return
+        achat = ex["evenement"].str.startswith("achat")
+        # Positif = la simulation a payé plus cher (ou reçu moins) que le marché observé : elle est prudente
+        ex["prudence"] = np.where(achat, ex["prix_simule"] / ex["ask"] - 1, 1 - ex["prix_simule"] / ex["bid"])
+        st.caption(f"{len(ex)} exécutions comparées. En moyenne, la simulation est "
+                   f"{'plus prudente' if ex['prudence'].mean() >= 0 else 'plus OPTIMISTE'} que le marché de "
+                   f"{abs(ex['prudence'].mean()) * 100:.3f} % par ordre.")
+        st.dataframe(pd.DataFrame({
+            "Robot": ex["robot"], "Quand": _local(ex["t"]).dt.strftime("%d/%m %H:%M"), "Ordre": ex["evenement"],
+            "Prix simulé": ex["prix_simule"].round(4), "Acheteur observé": ex["bid"], "Vendeur observé": ex["ask"],
+            "Simulation − marché": (ex["prudence"] * 100).map("{:+.3f} %".format)}),
+            hide_index=True, use_container_width=True)
 
 
 # ----------------------------------------------------------------- banc d'essai

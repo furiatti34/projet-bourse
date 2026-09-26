@@ -52,12 +52,18 @@ levier et paris à la baisse autorisés (au plus 0.5 au total) mais seulement av
 Les frais coûtent : ne change pas tout sans raison nette. Raisonne sur les faits du dossier, confronte les avis \
 des économistes aux chiffres, et explique tes choix en français, en phrases courtes."""
 
-SCHEMA = {"type": "object", "required": ["analyse", "allocation", "raisons", "conviction"], "properties": {
-    "analyse": {"type": "string", "description": "Lecture de la situation en 3 à 5 phrases"},
-    "allocation": {"type": "array", "items": {"type": "object", "required": ["ticker", "part"], "properties": {
-        "ticker": {"type": "string"}, "part": {"type": "number"}}}},
-    "raisons": {"type": "array", "items": {"type": "string"}},
-    "conviction": {"type": "string", "enum": ["faible", "moyenne", "forte"]}}}
+def schema(tickers: list[str]) -> dict:
+    """Forme imposée à la réponse de l'IA. Les bornes (nombre de lignes, longueurs, tickers de la liste) sont
+    appliquées PENDANT l'écriture : sans elles, le petit modèle se met parfois à répéter la même ligne sans fin
+    (« ZPDU.DE 5 %, ZPDE.DE 5 %, ZPDU.DE 5 %… », une réflexion sur deux dans une simulation de mai-juin 2025)."""
+    return {"type": "object", "required": ["analyse", "allocation", "raisons", "conviction"], "properties": {
+        "analyse": {"type": "string", "maxLength": 900, "description": "Lecture de la situation en 3 à 5 phrases"},
+        "allocation": {"type": "array", "maxItems": 12, "items": {
+            "type": "object", "required": ["ticker", "part"], "properties": {
+                "ticker": {"type": "string", "enum": tickers} if tickers else {"type": "string"},
+                "part": {"type": "number"}}}},
+        "raisons": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 250}},
+        "conviction": {"type": "string", "enum": ["faible", "moyenne", "forte"]}}}
 
 
 class InvalidAnswer(Exception):
@@ -141,7 +147,8 @@ class EcoStrategy(Strategy):
     def _call_ai(self, dossier: str, read_timeout: int) -> dict:
         model = self.params.get("modele", "qwen3:8b")
         resp = requests.post(f"{OLLAMA}/api/chat", timeout=(5, read_timeout), json={
-            "model": model, "stream": False, "think": False, "format": SCHEMA, "keep_alive": "30m",
+            "model": model, "stream": False, "think": False, "keep_alive": "30m",
+            "format": schema(sorted(self.view.assets) if self.view else []),
             # num_predict : une réponse normale fait ~1 000 jetons ; au-delà, l'IA s'emballe (elle peut sinon
             # écrire jusqu'à remplir sa mémoire, ~30 min pour une réponse inutilisable)
             "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED, "num_predict": MAX_TOKENS},
