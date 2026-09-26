@@ -209,7 +209,37 @@ class LabAudacieux(AudacieuxStrategy):
             # carnet n°18 : en posture « baisse », tout au placement sans risque au lieu du pari à la baisse ×2
             self.think("Posture baisse : je me mets à l'abri dans le placement sans risque, sans pari à la baisse.")
             return {self.params["titre_monetaire"]: round(1 - CASH_BUFFER, 3)}
-        return self._targets(mode)
+        return self._voile(mode, self._targets(mode))
+
+    def _voile(self, mode: str, targets: dict[str, float]) -> dict[str, float]:
+        """Carnet n°34 (méthode B) : « par mer agitée, on réduit la voilure ». Avec `voile_selon_volatilite`,
+        chaque placement à levier (×2, ou ×2 à la baisse) est réduit quand sa volatilité des 20 derniers jours
+        dépasse sa volatilité HABITUELLE (médiane de tout ce que le robot a observé jusqu'ici, jamais la suite) :
+        part × habituelle ÷ actuelle. Le reste va au placement sans risque. Pari de crise : inchangé."""
+        if not self.params.get("voile_selon_volatilite") or mode == CRISIS or self.view is None:
+            return targets
+        state = getattr(self, "_state", {})
+        seen = state.setdefault("volatilites", {})
+        today = clock.now().date().isoformat()
+        out, money = dict(targets), self.params["titre_monetaire"]
+        for ticker, share in targets.items():
+            asset = self.view.asset(ticker)
+            if asset is None or abs(asset.leverage) < 2 or not asset.vol:
+                continue
+            hist = seen.setdefault(ticker, {})
+            hist[today] = asset.vol
+            if len(hist) < 60:                         # pas encore assez vu pour savoir ce qui est « habituel »
+                continue
+            vols = sorted(hist.values())
+            usual = vols[len(vols) // 2]
+            scale = min(1.0, usual / asset.vol)
+            if scale < 0.999:
+                cut = round(share * (1 - scale), 3)
+                out[ticker] = round(share - cut, 3)
+                out[money] = round(out.get(money, 0) + cut, 3)
+                self.think(f"{asset.name} est agité (volatilité {asset.vol:.0f} % contre {usual:.0f} % d'habitude) : "
+                           f"je n'en garde que {scale:.0%}.")
+        return out
 
     def _targets(self, mode: str) -> dict[str, float]:
         """Carnet n°2 : en posture neutre, le marché d'accompagnement (50 %) est gardé tant qu'il reste dans
@@ -276,21 +306,24 @@ class LabKamikaze(KamikazeStrategy):
         trend = bool(p.get("exiger_tendance"))
         # Carnet n°22 : `baisse_si_tempete` → paris à la baisse seulement quand le climat est à la tempête
         no_short = bool(p.get("baisse_si_tempete")) and view.risk_score > -30
+        # Carnet n°35 (méthode B) : `elan_de_fond` → classer selon l'élan de fond (semaines, mois) au lieu du
+        # « sprint » de quelques jours, que les études trouvent surtout fait de bruit qui se retourne.
+        speed = (lambda a: a.momentum) if p.get("elan_de_fond") else (lambda a: a.sprint)
         ranked = sorted((a for a in view.pick(families=FAMILIES, exclude=set(state.get("banned", {})))
-                         if a.sprint > 0 and a.ret_5d > 0 and (not trend or a.above_ma50)
-                         and not (no_short and a.leverage < 0)), key=lambda a: -a.sprint)
+                         if speed(a) > 0 and a.ret_5d > 0 and (not trend or a.above_ma50)
+                         and not (no_short and a.leverage < 0)), key=lambda a: -speed(a))
         self.think("Ce qui monte le plus vite : " + ", ".join(
-            f"{a.name} ({a.sprint:+.1f})" for a in ranked[:4]) if ranked else "Rien ne monte en ce moment.")
+            f"{a.name} ({speed(a):+.1f})" for a in ranked[:4]) if ranked else "Rien ne monte en ce moment.")
         if not ranked:
             return []
-        best = ranked[0].sprint
+        best = speed(ranked[0])
         horses = []
         for ticker, entry in state.get("entries", {}).items():   # garder ses chevaux ?
             a = view.asset(ticker)
             if a is None:
                 continue
             young = now - datetime.fromisoformat(entry["since"]) < timedelta(hours=p["duree_min_heures"])
-            if a in ranked[:keep_rank] or young or best - a.sprint < p["ecart_rotation"]:
+            if a in ranked[:keep_rank] or young or best - speed(a) < p["ecart_rotation"]:
                 horses.append(a)
         for a in ranked:
             if len(horses) >= 2:
@@ -315,7 +348,7 @@ class LabKamikaze(KamikazeStrategy):
                 horses = [a for a in horses if a in held] + kept
                 horses += [a for a in ranked if a not in horses][: max(0, 2 - len(horses))]
                 horses = horses[:2]
-        return sorted(horses, key=lambda a: -a.sprint)
+        return sorted(horses, key=lambda a: -speed(a))
 
 
 LAB = {cls.name: cls for cls in (LabPrudent, LabOpportuniste, LabAudacieux, LabKamikaze)}
