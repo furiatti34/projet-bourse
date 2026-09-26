@@ -4,6 +4,7 @@ sur l'entraînement et la validation, avec exactement les mêmes données.
     python -m bourse.labo.evaluer <nom de l'essai> '<réglages candidats en JSON>' [robots]
 
 Exemple : python -m bourse.labo.evaluer frais-kamikaze '{"kamikaze": {"garde_min_heures": 72}}' kamikaze
+Méthode B (validation année par année) : ajouter B en 4e argument (robots vides = tous).
 
 Toutes les simulations d'un essai lisent une COPIE FIGÉE des archives d'actualités (le téléchargement
 continue à côté) : la version actuelle et la candidate voient donc exactement les mêmes informations.
@@ -28,6 +29,10 @@ from . import LAB_DIR, lab_settings
 TRAIN = (date(2016, 9, 26), date(2019, 12, 31))
 VALID = (date(2020, 1, 1), date(2022, 12, 31))
 EXAM = (date(2023, 1, 1), None)      # jamais utilisé ici
+# Méthode B (data/labo/methodes.md) : la validation est jouée année par année, trois devoirs séparés
+VALID_ANNEES = {"validation_2020": (date(2020, 1, 1), date(2020, 12, 31)),
+                "validation_2021": (date(2021, 1, 1), date(2021, 12, 31)),
+                "validation_2022": (date(2022, 1, 1), date(2022, 12, 31))}
 ROBOT_NAMES = {"prudent": "Robot Prudent", "opportuniste": "Robot Opportuniste", "audacieux": "Robot Audacieux",
                "kamikaze": "Robot Kamikaze"}
 PYTHONW = PROJECT_ROOT / ".venv" / "Scripts" / "pythonw.exe"
@@ -78,13 +83,14 @@ def metrics(path: Path) -> dict:
     return out
 
 
-def run(name: str, candidate: dict, robots: list[str]) -> dict:
+def run(name: str, candidate: dict, robots: list[str], methode: str = "A") -> dict:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = LAB_DIR / "essais" / f"{stamp}_{name}"
     folder.mkdir(parents=True, exist_ok=True)
     archive = freeze_archive(folder)
     train_end = min(TRAIN[1], news_until(archive) - timedelta(days=1))
-    periods = {"entrainement": (TRAIN[0], train_end), "validation": VALID}
+    periods = {"entrainement": (TRAIN[0], train_end)}
+    periods.update(VALID_ANNEES if methode == "B" else {"validation": VALID})
     base = lab_settings(load_settings())
     cand = json.loads(json.dumps(base))
     for p in cand["paper_trading"]["portefeuilles"]:
@@ -107,7 +113,7 @@ def run(name: str, candidate: dict, robots: list[str]) -> dict:
     t0 = time.monotonic()
     for proc, _ in jobs.values():
         proc.wait()
-    result = {"essai": name, "candidat": candidate, "robots": names, "date": stamp,
+    result = {"essai": name, "methode": methode, "candidat": candidate, "robots": names, "date": stamp,
               "periodes": {k: [a.isoformat(), b.isoformat()] for k, (a, b) in periods.items()},
               "duree_min": round((time.monotonic() - t0) / 60, 1),
               "resultats": {f"{v}/{p}": metrics(path) for (v, p), (_, path) in jobs.items()}}
@@ -118,5 +124,6 @@ def run(name: str, candidate: dict, robots: list[str]) -> dict:
 if __name__ == "__main__":
     essai = sys.argv[1]
     cand = json.loads(sys.argv[2]) if len(sys.argv) > 2 else {}
-    rob = sys.argv[3].split(",") if len(sys.argv) > 3 else list(ROBOT_NAMES)
-    print(json.dumps(run(essai, cand, rob), ensure_ascii=False, indent=2))
+    rob = sys.argv[3].split(",") if len(sys.argv) > 3 and sys.argv[3] else list(ROBOT_NAMES)
+    methode = sys.argv[4] if len(sys.argv) > 4 else "A"
+    print(json.dumps(run(essai, cand, rob, methode), ensure_ascii=False, indent=2))

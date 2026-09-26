@@ -162,6 +162,17 @@ class LabAudacieux(AudacieuxStrategy):
 
     def on_cycle(self, broker, state):
         self._state = state
+        # Carnet n°32 (méthode B) : la posture suit la moyenne de la note de climat des `lissage_jours` derniers
+        # jours, comme Prudent (n°4), au lieu de la note du moment : moins d'allers-retours entre postures.
+        days = int(self.params.get("lissage_jours", 0))
+        if days > 1 and self.view is not None:
+            history = state.setdefault("climats", {})
+            history[clock.now().date().isoformat()] = self.view.risk_score
+            for old in sorted(history)[:-days]:
+                del history[old]
+            smooth = round(sum(history.values()) / len(history))
+            self.think(f"Note de climat moyenne sur {len(history)} jour(s) : {smooth:+d} (aujourd'hui {self.view.risk_score:+d}).")
+            self.view = _ScoreOverride(self.view, smooth)
         super().on_cycle(broker, state)
 
     def wanted_mode(self) -> str:
@@ -286,7 +297,25 @@ class LabKamikaze(KamikazeStrategy):
                 break
             if a not in horses:
                 horses.append(a)
-        return sorted(horses[:2], key=lambda a: -a.sprint)
+        horses = horses[:2]
+        # Carnet n°33 (méthode B) : `confirmer_rotation` → un cheval détenu n'est lâché que si l'envie de le
+        # lâcher dure depuis la veille au moins (pas sur un classement d'un seul jour). Le stop-loss et la
+        # sécurisation des gains restent immédiats (guard_positions, avant ce choix).
+        if p.get("confirmer_rotation"):
+            held = [a for a in (view.asset(t) for t in state.get("entries", {})) if a is not None]
+            wanted = {a.ticker for a in horses}
+            pending = state.setdefault("a_lacher", {})
+            today = now.date().isoformat()
+            kept = [a for a in held if a.ticker not in wanted and pending.setdefault(a.ticker, today) == today]
+            for t in [t for t in pending if t in wanted or t not in {a.ticker for a in held}]:
+                del pending[t]
+            if kept:
+                self.think("Je voudrais changer de cheval, mais j'attends demain pour confirmer : "
+                           + ", ".join(a.name for a in kept) + ".")
+                horses = [a for a in horses if a in held] + kept
+                horses += [a for a in ranked if a not in horses][: max(0, 2 - len(horses))]
+                horses = horses[:2]
+        return sorted(horses, key=lambda a: -a.sprint)
 
 
 LAB = {cls.name: cls for cls in (LabPrudent, LabOpportuniste, LabAudacieux, LabKamikaze)}
