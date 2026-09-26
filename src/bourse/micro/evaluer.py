@@ -57,7 +57,9 @@ def _variables(ctx: dict, idx: np.ndarray) -> tuple[np.ndarray, list[str]]:
     for k in ("ret1", "ret3", "ret5", "ret15", "ret60"):
         cols.append(f[k] / f["atr_pct"]); noms.append(k)
     cols.append(f["macd_hist"] / f["atr_pct"]); noms.append("macd")
-    cols.append(np.log(f["atr_pct"])); noms.append("volatilité")
+    # (correction du 26/09 : un marché complètement immobile donnait log(0) = −∞, remplacé ensuite par 0,
+    # c'est-à-dire lu comme une agitation EXTRÊME ; on borne donc la volatilité à 0,001 % minimum)
+    cols.append(np.log(np.maximum(np.nan_to_num(f["atr_pct"]), 1e-5))); noms.append("volatilité")
     for h in range(0, 24, 4):
         cols.append(((f["heure"] >= h) & (f["heure"] < h + 4)).astype(float)); noms.append(f"heure {h}-{h+4}")
     cols.append(np.isin(f["minute"], (14, 29, 44, 59)).astype(float)); noms.append("fin de quart d'heure")

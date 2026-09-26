@@ -23,6 +23,8 @@ from .strategies import contexte
 
 DOSSIER = MICRO_DIR / "essais"
 STANDARD = SCENARIOS[0]
+# Référence des essais 1 à 4 : le modèle du banc corrigé, ré-appris après la correction de la volatilité (essai 0)
+REFERENCE = "essais/essai0_correction_volatilite_modele.json"
 REGLES_GROS = Regles(objectif_atr=3.0, stop_atr=2.0, duree=120, objectif_min=0.0060)
 
 
@@ -78,8 +80,22 @@ def _charger(p):
 
 def variantes(essai: int):
     """(nom, fabrique) : fabrique(contextes) → liste de (nom, stratégie, filtre de liquidité ou None)."""
-    ref = charger_modele("modele_reference_v2.json")
-    reference = ("Référence (modèle v2)", strategie_modele(ref), False)
+    if essai == 0:
+        # Pas une amélioration : la correction d'un défaut. Même étiquette, mêmes règles ; seule change la
+        # lecture de la volatilité. Comparée au modèle du banc (v2) pour information.
+        def fab():
+            ex = []
+            for p in PAIRES_BANC:
+                ctx, _ = _charger(p)
+                ex.append(exemples_hausse(ctx, 0.003, 30))
+                del ctx
+            m = apprendre(ex)
+            v2 = strategie_modele(charger_modele("modele_reference_v2.json"))
+            return m, [("Référence (modèle v2 du banc)", v2, False),
+                       ("Essai 0 : volatilité corrigée", strategie_modele(m), False)]
+        return "essai0_correction_volatilite", fab
+    ref = charger_modele(REFERENCE)
+    reference = ("Référence (modèle v2 corrigé)", strategie_modele(ref), False)
     if essai == 1:
         def fab():
             ex = []
@@ -204,9 +220,9 @@ def choisir_meilleur() -> str | None:
 def _strategies_gardees(nom: str | None):
     """La version gardée, au marché (« Référence » de l'essai 4) contre la même en ordre à cours limité."""
     if nom is None:
-        s, filtre = strategie_modele(charger_modele("modele_reference_v2.json")), False
+        s, filtre = strategie_modele(charger_modele(REFERENCE)), False
     elif nom.startswith("essai2"):
-        s, filtre = strategie_modele(charger_modele("modele_reference_v2.json")), True
+        s, filtre = strategie_modele(charger_modele(REFERENCE)), True
     else:
         regles = REGLES_GROS if nom.startswith("essai3") else REGLES_MODELE
         s, filtre = strategie_modele(charger_modele(f"essais/{nom}_modele.json"), regles), False

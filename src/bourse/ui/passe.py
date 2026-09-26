@@ -186,6 +186,9 @@ def render(ui) -> None:
 
     @st.fragment(run_every=3 if info.get("statut") in RUNNING else None)
     def live():
+        if not path.exists():   # simulation supprimée entre-temps : ne pas recréer un fichier vide en la lisant
+            st.info("Cette simulation n'existe plus.")
+            return
         conn = _open(path)
         try:
             show_simulation(ui, conn, path)

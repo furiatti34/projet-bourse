@@ -156,7 +156,8 @@ def list_simulations() -> list[tuple[Path, dict]]:
             conn = sqlite3.connect(path, timeout=5)
             info = get_info(conn)
             conn.close()
-            result.append((path, info))
+            if info.get("debut") and info.get("fin"):   # fichier vide ou abîmé : ignoré
+                result.append((path, info))
         except sqlite3.Error:
             continue
     return result
