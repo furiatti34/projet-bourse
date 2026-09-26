@@ -55,7 +55,10 @@ def _direct(ui) -> None:
             conn.close()
         dernier = max((r["dernier_t"] or 0) for r in robots) if robots else 0
         retard = datetime.now(timezone.utc).timestamp() - dernier - 60
-        if retard > 300:
+        if (MICRO / "PAUSE").exists():
+            st.info("⏸️ Microtrading en pause (priorité au long terme). Les robots sont arrêtés ; tout est gardé "
+                    "tel quel et reprendra là où il s'est arrêté.")
+        elif retard > 300:
             st.warning(f"⏸️ Les robots ne tournent pas (dernière minute traitée il y a {retard / 60:.0f} min). "
                        "Ils redémarrent tout seuls à l'ouverture de session.")
         else:
