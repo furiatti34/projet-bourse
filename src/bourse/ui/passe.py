@@ -71,6 +71,12 @@ ECO_GAPS = [
      "lendemain). Mais la bibliothèque a été constituée en 2026 à partir des flux des auteurs, qui ne gardent "
      "souvent que leurs derniers articles : en 2025, Éco dispose donc de moins d'avis (2 à 13 textes par mois "
      "jusqu'à septembre 2025, puis bien davantage) qu'il n'en aurait eu en suivant ces auteurs à l'époque."),
+    ("Robot Éco : actualités plus rares de mai à septembre 2025",
+     "archive.org n'a presque pas conservé les flux de CNBC, Nikkei, Le Monde, France 24… avant octobre 2025 "
+     "(quelques copies par mois, contre ~600 à partir d'octobre). De mai à septembre 2025, les robots lisent "
+     "surtout Google Actualités, la BBC, Al Jazeera et les communiqués de la Fed et de la BCE ; ensuite, presque "
+     "toutes les sources du présent. La simulation n'avance jamais plus vite que le téléchargement de ces "
+     "archives : elle attend qu'une journée soit téléchargée avant de la jouer."),
     ("Robot Éco : textes dans leur version actuelle",
      "Les textes des économistes ont été téléchargés en 2025-2026 : si un auteur a corrigé son article après "
      "l'avoir publié, Éco lit la version corrigée. C'est rare et limité à des retouches."),

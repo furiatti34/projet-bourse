@@ -286,6 +286,43 @@ class SimLibrary:
         return n
 
 
+# ---------------------------------------------------------------- archives pas encore téléchargées
+
+ARCHIVE_WAIT_MAX = 3600   # secondes sans aucun progrès du téléchargement avant de continuer sans les archives
+
+
+def archives_ready(archive: sqlite3.Connection, settings: dict, day: date) -> bool:
+    """Les archives des flux (BBC, CNBC, Le Monde…) de ce jour sont-elles téléchargées ? Oui si chaque flux a
+    été traité ce jour-là, ou si le téléchargement est déjà passé au jour suivant (un flux manquant est alors un
+    trou définitif de l'archive, pas un retard)."""
+    origins = [actualites.wayback_origin(f) for f in settings["veille"]["sources"] if not f.get("agregateur")]
+    if not origins:
+        return True
+    marks = ",".join("?" * len(origins))
+    done = archive.execute(f"SELECT COUNT(DISTINCT origin) FROM hist_coverage WHERE day = ? AND origin IN ({marks})",
+                           (day.isoformat(), *origins)).fetchone()[0]
+    if done == len(origins):
+        return True
+    return archive.execute(f"SELECT 1 FROM hist_coverage WHERE day > ? AND origin IN ({marks}) LIMIT 1",
+                           (day.isoformat(), *origins)).fetchone() is not None
+
+
+def wait_for_archives(archive, settings: dict, day: date, say) -> bool:
+    """La simulation ne dépasse jamais le téléchargement des archives : elle l'attend tant qu'il progresse.
+    Renvoie False si le téléchargement ne progresse plus (arrêté) : la simulation continue sans ces archives."""
+    last_count, last_progress = None, time.monotonic()
+    while not archives_ready(archive, settings, day):
+        count = archive.execute("SELECT COUNT(*) FROM hist_coverage").fetchone()[0]
+        if count != last_count:
+            last_count, last_progress = count, time.monotonic()
+        elif time.monotonic() - last_progress > ARCHIVE_WAIT_MAX:
+            return False
+        say(f"En attente des archives d'actualités du {day:%d/%m/%Y} (BBC, CNBC, Le Monde… : téléchargement en "
+            "cours)")
+        time.sleep(30)
+    return True
+
+
 # ---------------------------------------------------------------- reprise après une coupure
 
 def _pid_alive(pid: int | None) -> bool:
@@ -488,6 +525,21 @@ def run(path: Path) -> None:
         ecarts.append(f"Simulation interrompue puis reprise d'elle-même à l'heure simulée {first:%d/%m/%Y %H:%M} UTC "
                       f"(le {datetime.now():%d/%m/%Y à %H:%M}, heure réelle). Rien n'est perdu ; au pire, le dernier "
                       "quart d'heure simulé a été rejoué.")
+    # Avec Éco (simulation longue), on ne dépasse jamais le téléchargement des archives des flux : chaque jour
+    # simulé attend que ses archives soient là. Sans Éco (quelques minutes), on prend ce qui est déjà téléchargé.
+    gate = {"days": set(), "off": not has_eco}
+
+    def archives_for(day: date) -> None:
+        if gate["off"] or day in gate["days"]:
+            return
+        gate["days"].add(day)
+        if not wait_for_archives(archive, settings, day, lambda text: status(message=text)):
+            gate["off"] = True
+            ecarts.append(f"Le téléchargement des archives BBC, CNBC, Le Monde… s'est arrêté : à partir du "
+                          f"{day:%d/%m/%Y}, la simulation a continué avec les seules archives déjà téléchargées.")
+            status(ecarts=ecarts)
+    for k in range((first.date() - earliest.date()).days + 1):
+        archives_for(earliest.date() + timedelta(days=k))
     before = actualites.articles_between(archive, datetime(1990, 1, 1, tzinfo=timezone.utc), first)
     before = [(a, seen) for a, seen in before if seen >= earliest]
     _save_articles(conn, before)
@@ -515,6 +567,7 @@ def run(path: Path) -> None:
     n_alerts = int(info.get("alertes") or 0) if resume_from else 0
     for i, t in enumerate(steps, start=done):
         clock.set_simulated(t)
+        archives_for(t.date())
         # 1. nouveaux articles visibles (et nouveaux textes d'économistes)
         new = actualites.articles_between(archive, last_seen, t)
         last_seen = t
