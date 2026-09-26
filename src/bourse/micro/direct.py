@@ -29,6 +29,7 @@ import yaml
 from bourse.config import PROJECT_ROOT
 
 from . import MICRO_DIR, evaluer
+from .couts import glissement
 from .moteur import DUREE, OBJECTIF, SCENARIOS, STOP, Regles
 from .strategies import catalogue, contexte
 
@@ -36,6 +37,7 @@ CONFIG = PROJECT_ROOT / "config" / "micro.yaml"
 BASE = MICRO_DIR / "direct.db"
 VERROU = MICRO_DIR / "direct.pid"
 API = "https://data-api.binance.vision/api/v3/klines"
+API_CARNET = "https://data-api.binance.vision/api/v3/ticker/bookTicker"
 HISTORIQUE = 3000        # minutes relues à chaque passage (le temps que les indicateurs se stabilisent)
 FRAIS = 90               # une minute n'est « en direct » que si elle a fermé il y a moins de 90 s
 MOTIFS = {OBJECTIF: "objectif", STOP: "stop-loss", DUREE: "durée max"}
@@ -56,6 +58,11 @@ def connexion(path: Path = BASE) -> sqlite3.Connection:
             signal_t REAL, entree_t REAL, sortie_t REAL, px_in REAL, px_out REAL, motif TEXT,
             rendement REAL, capital_apres REAL);
         CREATE TABLE IF NOT EXISTS journal (id INTEGER PRIMARY KEY, t TEXT, robot TEXT, message TEXT);
+        -- Vrais meilleurs prix acheteur (bid) / vendeur (ask) relevés à chaque passage : pour vérifier
+        -- l'écart estimé par la simulation, et comparer chaque exécution simulée au marché observé.
+        CREATE TABLE IF NOT EXISTS releves (t REAL, paire TEXT, bid REAL, ask REAL, bid_qte REAL, ask_qte REAL);
+        CREATE TABLE IF NOT EXISTS executions (id INTEGER PRIMARY KEY, t REAL, robot TEXT, paire TEXT,
+            evenement TEXT, prix_simule REAL, bid REAL, ask REAL, t_releve REAL);
     """)
     return conn
 
@@ -112,10 +119,13 @@ class Robot:
 
     def _sortie(self, conn, s, e, j, d, px, motif):
         fr, lim = self.frais, e["limite"]
-        px_in = e["px_in"] * (1 if lim else 1 + fr.glissement)
+        px_in = e["px_in"] * (1 if lim else 1 + max(fr.glissement, e.get("gl_in", 0.0)))
         fee_in = fr.maker if lim else fr.taker
         fee_out = fr.maker if motif == OBJECTIF else fr.taker
-        px_net = px if motif == OBJECTIF else px * (1 - fr.glissement)
+        px_net = px if motif == OBJECTIF else px * (1 - max(fr.glissement, float(self._gl[j])))
+        if motif != OBJECTIF:
+            self._execution(conn, d["t"][j], f"vente au marché ({MOTIFS[motif]})", px_net,
+                            self._cot if self._dernier == j else None)
         r = px_net * (1 - fee_out) / (px_in * (1 + fee_in)) - 1
         s["cash"] *= 1 + r
         conn.execute("INSERT INTO operations (robot, paire, signal_t, entree_t, sortie_t, px_in, px_out, motif,"
@@ -133,9 +143,11 @@ class Robot:
             if not en_direct or t - e["signal_t"] != 60:
                 s["etat"] = {}                                   # PC éteint entre-temps : l'achat n'a pas eu lieu
                 return
-            e.update(etape="position", px_in=o, entree_t=t, age=0,
+            e.update(etape="position", px_in=o, entree_t=t, age=0, gl_in=float(self._gl[j]),
                      tp=o + max(R.objectif_atr * e["atr"], R.objectif_min * o), sl=o - R.stop_atr * e["atr"])
             _note(conn, self.nom, f"Achat au marché à {o:.2f} (objectif {e['tp']:.2f}, stop {e['sl']:.2f})")
+            fr = self.frais
+            self._execution(conn, t, "achat au marché", o * (1 + max(fr.glissement, e["gl_in"])), e.get("cotation"))
         elif e.get("etape") == "achat_limite":
             if l < e["limite_px"]:
                 p = e["limite_px"]
@@ -165,16 +177,29 @@ class Robot:
             if not np.isfinite(atr) or atr <= 0:
                 return
             if R.limite:
-                s["etat"] = {"etape": "achat_limite", "signal_t": t, "limite_px": c, "atr": atr, "limite": True}
-                _note(conn, self.nom, f"Signal « {self.strategie.nom} » : ordre d'achat à {c:.2f}")
+                s["etat"] = {"etape": "achat_limite", "signal_t": t, "limite_px": c * (1 - float(self._gl[j])),
+                             "atr": atr, "limite": True}
+                _note(conn, self.nom, f"Signal « {self.strategie.nom} » : ordre d'achat à {s['etat']['limite_px']:.2f}")
             else:
-                s["etat"] = {"etape": "achat_marche", "signal_t": t, "atr": atr, "limite": False}
+                s["etat"] = {"etape": "achat_marche", "signal_t": t, "atr": atr, "limite": False,
+                             "cotation": self._cot if self._dernier == j else None}
                 _note(conn, self.nom, f"Signal « {self.strategie.nom} » : achat au marché")
 
-    def passage(self, conn, d, ctx, maintenant: float):
+    def _execution(self, conn, t, evenement, prix, cot):
+        """Exécution simulée, à côté des vrais prix observés au même moment (si on était là)."""
+        if cot is None:
+            return
+        conn.execute("INSERT INTO executions (t, robot, paire, evenement, prix_simule, bid, ask, t_releve)"
+                     " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                     (float(t), self.nom, self.paire, evenement, float(prix), cot["bid"], cot["ask"], cot["t"]))
+
+    def passage(self, conn, d, ctx, maintenant: float, cot: dict | None = None):
         s = self.charger(conn)
         sig = self.strategie.signal(ctx)
         self._atr = ctx["f"]["atr"]
+        self._gl = glissement(d)
+        self._cot = cot
+        self._dernier = len(d["t"]) - 1 if cot else -1     # seule la dernière minute close est « observée »
         t = d["t"]
         debut = np.searchsorted(t, s["dernier_t"], side="right") if s["dernier_t"] else len(t) - 1
         for j in range(debut, len(t)):
@@ -197,15 +222,30 @@ def robots_config() -> list[Robot]:
     return robots
 
 
+def carnet(paires) -> dict[str, dict]:
+    """Meilleurs prix acheteur/vendeur à cet instant (données publiques)."""
+    t = time.time()
+    r = requests.get(API_CARNET, params={"symbols": json.dumps(sorted(paires), separators=(",", ":"))}, timeout=10)
+    r.raise_for_status()
+    return {x["symbol"]: {"t": t, "bid": float(x["bidPrice"]), "ask": float(x["askPrice"]),
+                          "bid_qte": float(x["bidQty"]), "ask_qte": float(x["askQty"])} for x in r.json()}
+
+
 def passage(robots: list[Robot], conn) -> None:
     paires = sorted({r.paire for r in robots})
     maintenant = time.time()
+    try:
+        cots = carnet(paires)        # relevé AVANT tout calcul : c'est l'instant où un vrai robot enverrait l'ordre
+        conn.executemany("INSERT INTO releves VALUES (?, ?, ?, ?, ?, ?)",
+                         [(c["t"], p, c["bid"], c["ask"], c["bid_qte"], c["ask_qte"]) for p, c in cots.items()])
+    except requests.RequestException:
+        cots = {}
     for p in paires:
         d = bougies(p)
         ctx = contexte(d)
         for r in robots:
             if r.paire == p:
-                r.passage(conn, d, ctx, maintenant)
+                r.passage(conn, d, ctx, maintenant, cots.get(p))
 
 
 def boucle() -> None:

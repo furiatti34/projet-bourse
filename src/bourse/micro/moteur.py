@@ -19,6 +19,10 @@ Si l'objectif et le stop sont touchés dans la même minute, on ne sait pas lequ
 on compte le STOP (le pire cas). Pendant la minute d'entrée, seul le stop est vérifié.
 
 Une seule position à la fois, tout le capital engagé (le cas des 10 € : pas de levier, pas de vente à découvert).
+
+Glissement : mesuré minute par minute dans les données (voir couts.py), au moins `Frais.glissement`.
+Ordre à cours limité : posé au prix acheteur estimé (clôture moins la moitié de l'écart), pour rester un
+vrai ordre « faiseur » même si la dernière transaction s'est faite au prix vendeur.
 """
 from dataclasses import dataclass
 
@@ -33,7 +37,7 @@ class Frais:
     nom: str
     maker: float        # en fraction : 0.001 = 0,1 %
     taker: float
-    glissement: float   # écart entre le prix affiché et le prix obtenu, pour un ordre au marché
+    glissement: float   # glissement MINIMAL d'un ordre au marché (le mesuré s'applique s'il est plus grand)
 
 
 SCENARIOS = [
@@ -64,19 +68,30 @@ class Trades:
     px_out: np.ndarray      # prix de vente (avant frais)
     motif: np.ndarray       # OBJECTIF / STOP / DUREE
     limite: bool
+    ambigu: np.ndarray | None = None    # objectif ET stop touchés dans la même minute (compté en stop)
+    gl_in: np.ndarray | None = None     # glissement mesuré à la minute d'achat
+    gl_out: np.ndarray | None = None    # … et à la minute de vente
 
     def __len__(self):
         return len(self.entree)
+
+    def _gl(self, x, fr):
+        return np.maximum(fr.glissement, x if x is not None else 0.0)
+
+    def prix_nets(self, fr: Frais) -> tuple[np.ndarray, np.ndarray]:
+        """(prix payé par unité, frais compris ; prix reçu par unité, frais déduits)."""
+        px_in = self.px_in * (1 if self.limite else 1 + self._gl(self.gl_in, fr))
+        fee_in = fr.maker if self.limite else fr.taker
+        fee_out = np.where(self.motif == OBJECTIF, fr.maker, fr.taker)
+        px_out = np.where(self.motif == OBJECTIF, self.px_out, self.px_out * (1 - self._gl(self.gl_out, fr)))
+        return px_in * (1 + fee_in), px_out * (1 - fee_out)
 
     def rendements(self, fr: Frais) -> np.ndarray:
         """Rendement net de chaque opération (0.001 = +0,1 %)."""
         if not len(self):
             return np.zeros(0)
-        px_in = self.px_in * (1 if self.limite else 1 + fr.glissement)
-        fee_in = fr.maker if self.limite else fr.taker
-        fee_out = np.where(self.motif == OBJECTIF, fr.maker, fr.taker)
-        px_out = np.where(self.motif == OBJECTIF, self.px_out, self.px_out * (1 - fr.glissement))
-        return (px_out * (1 - fee_out)) / (px_in * (1 + fee_in)) - 1
+        paye, recu = self.prix_nets(fr)
+        return recu / paye - 1
 
 
 def _premier(mask: np.ndarray) -> np.ndarray:
@@ -86,9 +101,15 @@ def _premier(mask: np.ndarray) -> np.ndarray:
 
 
 def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: Regles,
-            debut: float = -np.inf, fin: float = np.inf) -> Trades:
-    """Opérations déclenchées par `signaux` (vrai/faux par minute) entre les heures `debut` et `fin`."""
+            debut: float = -np.inf, fin: float = np.inf, gliss: np.ndarray | None = None,
+            chacun: bool = False) -> Trades:
+    """Opérations déclenchées par `signaux` (vrai/faux par minute) entre les heures `debut` et `fin`.
+    `gliss` : glissement mesuré par minute (couts.glissement) ; absent = le minimum du scénario de frais.
+    `chacun` : chaque signal donne son opération, même en chevauchant les autres (pour étiqueter les
+    exemples d'apprentissage du modèle IA : « si j'achetais ici, que se passerait-il ? »)."""
     o, h, l, c, t = d["o"], d["h"], d["l"], d["c"], d["t"]
+    if gliss is None:
+        gliss = np.zeros(len(c))
     n, H, W = len(c), r.duree, r.attente
     cand = np.flatnonzero(signaux & (t >= debut) & (t < fin) & np.isfinite(atr) & (atr > 0))
     cand = cand[cand < n - H - W - 2]
@@ -96,11 +117,12 @@ def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: R
     cand = cand[t[cand + 1] - t[cand] == 60]
     if not len(cand):
         e = np.zeros(0, dtype=int)
-        return Trades(e, e, e, np.zeros(0), np.zeros(0), e, r.limite)
+        z = np.zeros(0)
+        return Trades(e, e, e, z, z, e, r.limite, np.zeros(0, dtype=bool), z, z)
 
     # --- entrée ---
     if r.limite:
-        lim = c[cand]
+        lim = c[cand] * (1 - gliss[cand])            # au prix acheteur estimé (clôture − ½ écart)
         fen = sliding_window_view(l, W)[cand + 1]                     # minutes i+1 … i+W
         k = _premier(fen < lim[:, None])
         ok = k < W
@@ -127,6 +149,7 @@ def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: R
     touche_sl = lw <= sl[:, None]
     k_tp, k_sl = _premier(touche_tp), _premier(touche_sl)
     stop_first = k_sl <= k_tp                        # égalité → le stop (pire cas)
+    ambigu = (k_sl == k_tp) & (k_sl < H)
     motif = np.where((k_sl == H) & (k_tp == H), DUREE, np.where(stop_first, STOP, OBJECTIF))
     k_out = np.where(motif == DUREE, H - 1, np.where(stop_first, k_sl, k_tp))
     sortie = ent + k_out
@@ -148,30 +171,71 @@ def simuler(d: dict[str, np.ndarray], atr: np.ndarray, signaux: np.ndarray, r: R
             libre = fins[i]
             if servi[i]:
                 garde[i] = True
-    g = garde
-    return Trades(cand[g], ent[g], sortie[g], px_in[g], px_out[g], motif[g], r.limite)
+    g = np.ones(len(ent), dtype=bool) if chacun else garde
+    return Trades(cand[g], ent[g], sortie[g], px_in[g], px_out[g], motif[g], r.limite, ambigu[g],
+                  gliss[ent[g]], gliss[sortie[g]])
 
 
-def bilan(tr: Trades, fr: Frais, t: np.ndarray, jours: float) -> dict:
-    """Chiffres clés d'une série d'opérations pour un scénario de frais."""
-    r = tr.rendements(fr)
-    n = len(r)
+def bilan(tr: Trades, fr: Frais, jours: float, capital: float = 10.0, pas: float = 0.0,
+          minimum: float = 0.0) -> dict:
+    """Chiffres clés d'une série d'opérations pour un scénario de frais.
+
+    Deux calculs :
+      - par opération (en %), sans se soucier de la taille du compte ;
+      - l'argent réel d'un compte de `capital` €, qui ne peut acheter qu'un multiple de `pas` (règle de
+        Binance) et pas moins de `minimum` € : c'est ce que les 10 € seraient vraiment devenus.
+    """
+    vide = {"operations": 0, "par_jour": 0.0, "gagnantes": 0.0, "moyenne_pb": 0.0, "brut_pb": 0.0,
+            "gain_moyen_pb": 0.0, "perte_moyenne_pb": 0.0, "facteur_profit": 0.0, "facteur_profit_brut": 0.0,
+            "duree_moy_min": 0.0, "exposition": 0.0, "ambigus": 0.0, "total": 0.0, "total_brut": 0.0,
+            "par_an": 0.0, "pire_baisse": 0.0, "capital_final": capital, "couts_eur": 0.0,
+            "operations_impossibles": 0, "motifs": {}}
+    n = len(tr)
     if n == 0:
-        return {"operations": 0, "gagnantes": 0.0, "moyenne_pb": 0.0, "brut_pb": 0.0, "total": 0.0,
-                "par_an": 0.0, "pire_baisse": 0.0, "facteur_profit": 0.0, "par_jour": 0.0}
-    brut = tr.px_out / tr.px_in - 1
-    courbe = np.cumprod(1 + r)
-    pic = np.maximum.accumulate(np.r_[1.0, courbe])[1:]
-    gains, pertes = r[r > 0].sum(), -r[r < 0].sum()
-    total = courbe[-1] - 1
+        return vide
+    r = tr.rendements(fr)
+    brut = tr.px_out / tr.px_in - 1                      # avant frais ET avant glissement
+    duree = tr.sortie - tr.entree + 1
+    gains, pertes = r[r > 0], r[r < 0]
+    gb, pb_ = brut[brut > 0].sum(), -brut[brut < 0].sum()
+
+    # --- le compte de `capital` € ---
+    paye, recu = tr.prix_nets(fr)
+    cash, courbe, couts, impossibles = capital, [], 0.0, 0
+    for i in range(n):
+        q = cash / paye[i]
+        if pas:
+            q = np.floor(q / pas + 1e-9) * pas
+        if q <= 0 or q * tr.px_in[i] < minimum:
+            impossibles += 1                             # compte trop petit pour passer l'ordre
+            courbe.append(cash)
+            continue
+        cash += q * (recu[i] - paye[i])
+        couts += q * ((tr.px_out[i] - recu[i]) + (paye[i] - tr.px_in[i]))   # frais + glissement
+        courbe.append(cash)
+    courbe = np.array(courbe)
+    pic = np.maximum.accumulate(np.r_[capital, courbe])[1:]
+    total = courbe[-1] / capital - 1
     return {
         "operations": n,
-        "par_jour": n / max(jours, 1e-9),
+        "par_jour": n / max(jours, 1),
         "gagnantes": float((r > 0).mean()),
-        "moyenne_pb": float(r.mean() * 1e4),           # points de base : 1 pb = 0,01 %
-        "brut_pb": float(brut.mean() * 1e4),
+        "moyenne_pb": float(r.mean() * 1e4),            # espérance par opération, après frais (1 pb = 0,01 %)
+        "brut_pb": float(brut.mean() * 1e4),            # … avant frais et glissement
+        "gain_moyen_pb": float(gains.mean() * 1e4) if len(gains) else 0.0,
+        "perte_moyenne_pb": float(pertes.mean() * 1e4) if len(pertes) else 0.0,
+        "facteur_profit": float(gains.sum() / -pertes.sum()) if len(pertes) else float("inf"),
+        "facteur_profit_brut": float(gb / pb_) if pb_ else float("inf"),
+        "duree_moy_min": float(duree.mean()),
+        "exposition": float(duree.sum() / max(jours * 1440, 1)),    # part du temps passée en position
+        "ambigus": float(tr.ambigu.mean()) if tr.ambigu is not None else 0.0,
+        "motifs": {nom: float((tr.motif == k).mean()) for k, nom in ((OBJECTIF, "objectif"), (STOP, "stop"),
+                                                                     (DUREE, "duree"))},
         "total": float(total),
+        "total_brut": float(np.prod(1 + brut) - 1),
         "par_an": float((1 + total) ** (365 / max(jours, 1)) - 1) if total > -1 else -1.0,
         "pire_baisse": float((courbe / pic - 1).min()),
-        "facteur_profit": float(gains / pertes) if pertes else float("inf"),
+        "capital_final": float(courbe[-1]),
+        "couts_eur": float(couts),
+        "operations_impossibles": impossibles,
     }

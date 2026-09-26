@@ -24,7 +24,7 @@ from datetime import date, datetime, timezone
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
-from . import MICRO_DIR, PAIRES_BANC, donnees
+from . import MICRO_DIR, PAIRES_BANC, couts, donnees
 from .moteur import SCENARIOS, Regles, bilan, simuler
 from .strategies import Strategie, catalogue, contexte
 
@@ -171,9 +171,10 @@ def evaluer(paires=PAIRES_BANC, verbose=True) -> dict:
     for p in paires:
         ctx = contexte(donnees.charger(p, PERIODES["entrainement"][0]))
         d = ctx["d"]
+        gl = couts.glissement(d)
         fin_donnees[p] = datetime.fromtimestamp(d["t"][-1], timezone.utc).isoformat()
         for per, (a, b) in PERIODES.items():
-            jours[per, p] = (min(ts(b), d["t"][-1]) - max(ts(a), d["t"][0])) / 86400
+            jours[per, p] = max(0.0, (min(ts(b), d["t"][-1]) - max(ts(a), d["t"][0])) / 86400)
             m = (d["t"] >= ts(a)) & (d["t"] < ts(b))
             if m.any():
                 ref.setdefault(per, {})[p] = float(d["c"][m][-1] / d["o"][m][0] - 1)
@@ -182,7 +183,7 @@ def evaluer(paires=PAIRES_BANC, verbose=True) -> dict:
             for limite in (False, True):
                 r = replace(s.regles, limite=limite)
                 for per, (a, b) in PERIODES.items():
-                    trades[si, limite, per, p] = simuler(d, ctx["f"]["atr"], sig, r, ts(a), ts(b))
+                    trades[si, limite, per, p] = simuler(d, ctx["f"]["atr"], sig, r, ts(a), ts(b), gl)
         del ctx
         if verbose:
             print(f"  {p} simulée ({time.time() - t0:.0f} s)", flush=True)
@@ -201,7 +202,8 @@ def evaluer(paires=PAIRES_BANC, verbose=True) -> dict:
                     res, rends = {}, []
                     for p in paires:
                         tr = trades[si, limite, per, p]
-                        res[p] = bilan(tr, fr, None, jours[per, p])
+                        res[p] = bilan(tr, fr, jours[per, p], 10.0, couts.PAS.get(p, 0.0),
+                                       couts.MINIMUM.get(p, couts.MINIMUM_DEFAUT))
                         rends.append(tr.rendements(fr))
                     ok = _passe(list(res.values()), rends)
                     tous = np.concatenate(rends)
