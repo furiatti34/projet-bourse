@@ -76,10 +76,10 @@ def bougies(paire: str, n: int = HISTORIQUE) -> dict[str, np.ndarray]:
         fin = int(lot[0][0]) - 1
     now_ms = time.time() * 1000
     rows = [x for x in rows if x[6] < now_ms]            # la minute en cours n'est pas finie
-    a = np.array([[x[0] / 1000, x[1], x[2], x[3], x[4], x[5], x[8], x[9]] for x in rows], dtype=float)
+    a = np.array([[x[0] / 1000, x[1], x[2], x[3], x[4], x[5], x[8], x[9], x[7], x[10]] for x in rows], dtype=float)
     _, idx = np.unique(a[:, 0], return_index=True)
     a = a[idx]
-    return {k: a[:, i] for i, k in enumerate(("t", "o", "h", "l", "c", "v", "n", "vb"))}
+    return {k: a[:, i] for i, k in enumerate(("t", "o", "h", "l", "c", "v", "n", "vb", "q", "qb"))}
 
 
 def _note(conn, robot, msg):
@@ -187,9 +187,14 @@ class Robot:
 def robots_config() -> list[Robot]:
     cfg = lire_config()
     strat = {s.nom: s for s in catalogue()}
-    if any(r["strategie"] == evaluer.NOM_MODELE for r in cfg.get("robots", [])):
-        strat[evaluer.NOM_MODELE] = evaluer.strategie_modele(evaluer.charger_modele())
-    return [Robot(r, strat, cfg.get("capital_fictif", 10)) for r in cfg.get("robots", [])]
+    robots = []
+    for r in cfg.get("robots", []):
+        if r["strategie"] == evaluer.NOM_MODELE:
+            # Chaque robot garde SON modèle (fichier figé) : un nouveau banc d'essai ne le change pas en douce
+            fichier = r.get("modele", "modele.json")
+            strat = {**strat, evaluer.NOM_MODELE: evaluer.strategie_modele(evaluer.charger_modele(fichier))}
+        robots.append(Robot(r, strat, cfg.get("capital_fictif", 10)))
+    return robots
 
 
 def passage(robots: list[Robot], conn) -> None:

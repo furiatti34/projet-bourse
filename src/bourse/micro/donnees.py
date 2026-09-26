@@ -11,6 +11,10 @@ Colonnes (une ligne par minute, heure UTC) :
     v        volume (en crypto)
     n        nombre de transactions
     vb       volume des acheteurs « pressés » (ordres au marché côté achat)
+    q        volume en euros
+    qb       volume en euros des acheteurs pressés
+             → prix moyen des achats au marché (qb/vb) et des ventes au marché ((q-qb)/(v-vb)) :
+               leur écart mesure l'écart achat/vente RÉELLEMENT payé cette minute-là (voir couts.py)
 """
 import io
 import sys
@@ -25,14 +29,15 @@ from . import MICRO_DIR, PAIRES
 
 ARCHIVE = "https://data.binance.vision/data/spot"
 API = "https://data-api.binance.vision/api/v3/klines"
-COLS = ("t", "o", "h", "l", "c", "v", "n", "vb")
+COLS = ("t", "o", "h", "l", "c", "v", "n", "vb", "q", "qb")
 DEBUT = date(2021, 1, 1)
 
 
 def _parse(lines) -> dict[str, np.ndarray]:
     rows = [r for r in lines if r and r[0][:1].isdigit()]    # certaines archives ont une ligne d'en-tête
     a = np.array([[float(r[0]), float(r[1]), float(r[2]), float(r[3]), float(r[4]), float(r[5]),
-                   float(r[8]), float(r[9])] for r in rows], dtype=float).reshape(-1, 8)
+                   float(r[8]), float(r[9]), float(r[7]), float(r[10])] for r in rows],
+                 dtype=float).reshape(-1, len(COLS))
     t = a[:, 0]
     # Depuis 2025, Binance note l'heure en microsecondes (avant : millisecondes)
     t = np.where(t > 1e14, t / 1e6, t / 1e3)
@@ -100,7 +105,9 @@ def telecharger(symbol: str, verbose=True) -> None:
         f = dossier / f"{m:%Y-%m}.npz"
         mois_fini = (m.year, m.month) != (today.year, today.month)
         if f.exists() and mois_fini:
-            continue
+            with np.load(f) as z:
+                if set(COLS) <= set(z.files):
+                    continue                                    # déjà là, avec toutes les colonnes
         if mois_fini:
             d = _zip(f"{ARCHIVE}/monthly/klines/{symbol}/1m/{symbol}-1m-{m:%Y-%m}.zip")
         else:

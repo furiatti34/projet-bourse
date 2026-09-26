@@ -120,9 +120,9 @@ def entrainer_modele(echantillons: list) -> dict:
 NOM_MODELE = "Modèle IA (tous les indicateurs et patterns)"
 
 
-def charger_modele() -> dict:
-    """Le modèle appris par le dernier banc d'essai (data/micro/modele.json)."""
-    m = json.loads((MICRO_DIR / "modele.json").read_text(encoding="utf-8"))
+def charger_modele(fichier: str = "modele.json") -> dict:
+    """Un modèle appris par un banc d'essai (par défaut le dernier : data/micro/modele.json)."""
+    m = json.loads((MICRO_DIR / fichier).read_text(encoding="utf-8"))
     for k in ("w", "mu", "sd"):
         m[k] = np.array(m[k])
     return m
