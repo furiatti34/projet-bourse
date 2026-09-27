@@ -25,6 +25,8 @@ import sqlite3
 import sys
 import time
 import traceback
+
+import requests
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -289,7 +291,6 @@ class SimLibrary:
 
 # ---------------------------------------------------------------- archives pas encore téléchargées
 
-ARCHIVE_WAIT_MAX = 3600   # secondes sans aucun progrès du téléchargement avant de continuer sans les archives
 
 
 def archives_ready(archive: sqlite3.Connection, settings: dict, day: date) -> bool:
@@ -308,19 +309,40 @@ def archives_ready(archive: sqlite3.Connection, settings: dict, day: date) -> bo
                            (day.isoformat(), *origins)).fetchone() is not None
 
 
-def wait_for_archives(archive, settings: dict, day: date, say) -> bool:
-    """La simulation ne dépasse jamais le téléchargement des archives : elle l'attend tant qu'il progresse.
-    Renvoie False si le téléchargement ne progresse plus (arrêté) : la simulation continue sans ces archives."""
-    last_count, last_progress = None, time.monotonic()
+ARCHIVE_TRIES = 3   # essais (archive.org joignable) avant de jouer un jour sans ses archives manquantes
+
+
+def archive_org_reachable() -> bool:
+    try:
+        return requests.get("https://web.archive.org/", timeout=30,
+                            headers={"User-Agent": actualites.USER_AGENT}).status_code < 500
+    except requests.RequestException:
+        return False
+
+
+def wait_for_archives(archive, settings: dict, day: date, say, stop=lambda: False) -> bool:
+    """La simulation ne dépasse jamais les archives des flux : avant de jouer un jour, elle vérifie qu'elles sont
+    là et, sinon, les télécharge elle-même. archive.org injoignable (Wi-Fi de train, pas d'Internet…) : elle attend,
+    aussi longtemps qu'il faut. Joignable mais toujours incomplet après ARCHIVE_TRIES essais : trou définitif de
+    l'archive, le jour est joué avec ce qu'il y a (renvoie False, noté dans les écarts)."""
+    tries = 0
     while not archives_ready(archive, settings, day):
-        count = archive.execute("SELECT COUNT(*) FROM hist_coverage").fetchone()[0]
-        if count != last_count:
-            last_count, last_progress = count, time.monotonic()
-        elif time.monotonic() - last_progress > ARCHIVE_WAIT_MAX:
+        if stop():
+            return True
+        if not archive_org_reachable():
+            say(f"En attente d'archive.org, injoignable depuis ce réseau (archives du {day:%d/%m/%Y}) : la simulation "
+                "reprendra seule sur un autre réseau")
+            time.sleep(300)
+            continue
+        if tries >= ARCHIVE_TRIES:
             return False
-        say(f"En attente des archives d'actualités du {day:%d/%m/%Y} (BBC, CNBC, Le Monde… : téléchargement en "
-            "cours)")
-        time.sleep(30)
+        tries += 1
+        say(f"Téléchargement des archives d'actualités du {day:%d/%m/%Y} (BBC, CNBC, Le Monde…), essai {tries}")
+        try:
+            actualites.prefetch(settings, day, day, kinds=("wayback",))
+        except Exception:
+            log.exception("Archives du %s : téléchargement impossible", day)
+            time.sleep(60)
     return True
 
 
@@ -534,10 +556,11 @@ def run(path: Path) -> None:
         if gate["off"] or day in gate["days"]:
             return
         gate["days"].add(day)
-        if not wait_for_archives(archive, settings, day, lambda text: status(message=text)):
-            gate["off"] = True
-            ecarts.append(f"Le téléchargement des archives BBC, CNBC, Le Monde… s'est arrêté : à partir du "
-                          f"{day:%d/%m/%Y}, la simulation a continué avec les seules archives déjà téléchargées.")
+        stop = lambda: json.loads(conn.execute(   # noqa: E731
+            "SELECT valeur FROM simulation WHERE cle = 'statut'").fetchone()[0]) == "arret_demande"
+        if not wait_for_archives(archive, settings, day, lambda text: status(message=text), stop):
+            ecarts.append(f"Archives BBC, CNBC, Le Monde… incomplètes le {day:%d/%m/%Y} (introuvables sur archive.org "
+                          "après plusieurs essais) : ce jour-là a été joué avec les seules archives disponibles.")
             status(ecarts=ecarts)
     for k in range((first.date() - earliest.date()).days + 1):
         archives_for(earliest.date() + timedelta(days=k))
