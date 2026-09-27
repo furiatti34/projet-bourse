@@ -160,6 +160,17 @@ class LabOpportuniste(OpportunisteStrategy):
 class LabAudacieux(AudacieuxStrategy):
     name = "labo_audacieux"
 
+    def on_alert(self, alert, broker, state):
+        """Carnet n°36 (méthode B) : une alerte de crise ne déclenche le pari à la baisse que si la note de climat
+        est au plus `pari_crise_note_max` (au présent : toute alerte fraîche au vocabulaire de crise suffit, même
+        par climat optimiste — 19 paris de crise dans la simulation mai 2025-mai 2026, presque tous perdants)."""
+        limit = self.params.get("pari_crise_note_max")
+        if limit is not None and self.view is not None and self.view.risk_score > limit:
+            self.note(f"J'ignore l'{self.describe(alert, clock.now())} pour un pari de crise : le climat reste "
+                      f"positif ({self.view.risk_score:+d}/100).")
+            return
+        super().on_alert(alert, broker, state)
+
     def on_cycle(self, broker, state):
         self._state = state
         # Carnet n°32 (méthode B) : la posture suit la moyenne de la note de climat des `lissage_jours` derniers
