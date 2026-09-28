@@ -114,7 +114,10 @@ def run(name: str, candidate: dict, robots: list[str], methode: str = "A") -> di
                    "BOURSE_ARCHIVE": str(archive)}
             proc = subprocess.Popen([str(PYTHONW), "-m", "bourse.backtest.simulation", str(path)], cwd=PROJECT_ROOT,
                                     env=env, stdout=open(path.with_suffix(".log"), "w", encoding="utf-8"),
-                                    stderr=subprocess.STDOUT, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                                    stderr=subprocess.STDOUT,
+                                    # priorité basse : la course du présent et les simulations Éco passent avant
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                                    | getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0))
             jobs[(version, period)] = (proc, path)
     t0 = time.monotonic()
     for proc, _ in jobs.values():
