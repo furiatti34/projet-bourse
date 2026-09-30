@@ -278,6 +278,17 @@ class LabAudacieux(AudacieuxStrategy):
 class LabKamikaze(KamikazeStrategy):
     name = "labo_kamikaze"
 
+    def on_alert(self, alert, broker, state):
+        """Carnet n°37 (méthode B) : le pari de crise (tout sur la chute du Nasdaq ×3) n'est déclenché que si la
+        note de climat est au plus `pari_crise_note_max` (étude du 30/09 sur 2016-2019 : 9 paris, −0,6 % en
+        moyenne, 44 % gagnants)."""
+        limit = self.params.get("pari_crise_note_max")
+        if limit is not None and self.view is not None and self.view.risk_score > limit:
+            self.note(f"J'ignore l'{self.describe(alert, clock.now())} pour un pari de crise : le climat reste "
+                      f"positif ({self.view.risk_score:+d}/100).")
+            return
+        super().on_alert(alert, broker, state)
+
     def guard_positions(self, broker, state, now: datetime) -> bool:
         """Carnet n°15 : avec `stop_selon_levier`, le stop-loss vaut `stop_perte` × le levier du placement
         (7 % du marché sous-jacent : −21 % sur un ×3), au lieu de −7 % quel que soit le levier."""
