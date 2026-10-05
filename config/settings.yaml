@@ -113,12 +113,14 @@ paper_trading:
         # Boosté à l'IA (gratuite, sur ce PC via Ollama) : lit le climat, les alertes et les économistes
         # de la bibliothèque d'Éco 1, puis choisit lui-même sa répartition dans tout l'univers.
         modele: qwen3:8b              # modèle Ollama utilisé
-        reflexion_heures: 4           # analyse approfondie toutes les 4 h (et après une alerte FORTE)
+        reflexion_heures: 24          # analyse approfondie une fois par jour (et après une alerte FORTE)
+        duree_min_jours: 10           # anti-agitation : une position gardée au moins 10 jours (sauf alerte FORTE / stop-loss)
+        ecart_min_ligne: 0.05         # anti-agitation : une ligne ne bouge que si sa part change d'au moins 5 points
         part_max: 0.60                # garde-fou : 60 % au plus sur un seul placement
         levier_max: 0.50              # garde-fou : 50 % au plus en levier ou à la baisse
         stop_perte: 0.08              # une position à -8 % est coupée sans attendre l'IA
         delai_max_heures: 24
-        tolerance: 0.05
+        tolerance: 0.15               # réajuste seulement si un placement s'écarte de plus de 15 points
 
 # ------------------------------------------------------------
 #  Analyse du marché : ce que les robots étudient à chaque passage

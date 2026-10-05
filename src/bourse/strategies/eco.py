@@ -29,8 +29,8 @@ import requests
 from bourse import clock
 from bourse.config import db_path, load_settings
 from bourse.database import connect
-from bourse.execution.broker import SELL
-from bourse.execution.paper_broker import PENDING
+from bourse.execution.broker import BUY, SELL
+from bourse.execution.paper_broker import FILLED, PENDING
 
 from .base import CASH_BUFFER, Strategy
 
@@ -49,8 +49,11 @@ alertes, avis d'économistes d'écoles différentes, ton portefeuille. Décide l
 
 Règles : uniquement les tickers de la liste ; parts entre 0 et 0.6 ; somme des parts ≤ 0.99 (le reste en liquide) ; \
 levier et paris à la baisse autorisés (au plus 0.5 au total) mais seulement avec une vraie conviction. \
-Les frais coûtent : ne change pas tout sans raison nette. Raisonne sur les faits du dossier, confronte les avis \
-des économistes aux chiffres, et explique tes choix en français, en phrases courtes."""
+Chaque achat ou vente coûte (frais, écart de prix, change) : le dossier te dit combien tu as déjà payé. \
+Garde ton cap : repars de ta répartition actuelle et ne la modifie que si la situation a vraiment changé depuis \
+ta dernière analyse ; une position récente ne peut de toute façon pas être revendue avant quelques jours. \
+Raisonne sur les faits du dossier, confronte les avis des économistes aux chiffres, et explique tes choix \
+en français, en phrases courtes."""
 
 def schema(tickers: list[str]) -> dict:
     """Forme imposée à la réponse de l'IA. Les bornes (nombre de lignes, longueurs, tickers de la liste) sont
@@ -93,8 +96,17 @@ class EcoStrategy(Strategy):
         lines += ["", "Ce qu'en disent les économistes (extraits de la bibliothèque) :"] + self.economists(alerts)
         total = broker.total_value()
         held = broker.positions()
+        bought = self.last_buys(broker)
         lines += ["", f"Ton portefeuille : {total:,.0f} € dont {broker.cash() / total:.0%} de liquidités.".replace(",", " ")]
-        lines += [f"- {p['ticker']} : {p['valeur_eur'] / total:.0%} (gain {p['gain_pct']:+.1f} %)" for p in held]
+        lines += [f"- {p['ticker']} : {p['valeur_eur'] / total:.0%} (gain {p['gain_pct']:+.1f} %"
+                  + (f", acheté il y a {(clock.now() - bought[p['ticker']]).days} j" if p["ticker"] in bought else "")
+                  + ")" for p in held]
+        fills = broker.orders(FILLED)
+        fees = sum(o["fees_eur"] or 0 for o in fills)
+        volume = sum((o["filled_qty"] or 0) * (o["fill_price"] or 0) * (o["fx_to_eur"] or 1) for o in fills)
+        capital = broker.initial_cash()
+        lines += [f"Tes coûts depuis le départ : {len(fills)} ordres, {fees:,.0f} € de frais ({fees / capital:.1%} du "
+                  f"capital), {volume / capital:.1f} fois ton capital acheté ou vendu.".replace(",", " ")]
         if state.get("derniere_analyse"):
             lines += ["", f"Ta dernière analyse ({state.get('derniere_reflexion', '')[:16]}) : {state['derniere_analyse']}"]
         return "\n".join(lines)
@@ -184,6 +196,49 @@ class EcoStrategy(Strategy):
             targets = {t: w * (1 - CASH_BUFFER) / total for t, w in targets.items()}
         return {t: round(w, 3) for t, w in targets.items() if w >= 0.02}
 
+    @staticmethod
+    def last_buys(broker) -> dict[str, datetime]:
+        """Date du dernier achat exécuté de chaque titre."""
+        out: dict[str, datetime] = {}
+        for o in broker.orders(FILLED):          # du plus récent au plus ancien
+            if o["side"] == BUY and o["filled_at"] and o["ticker"] not in out:
+                out[o["ticker"]] = datetime.fromisoformat(o["filled_at"])
+        return out
+
+    def calm_targets(self, broker, targets: dict[str, float], alert: bool) -> dict[str, float]:
+        """Freine l'agitation (garde-fous que l'IA ne peut pas contourner) :
+          - une position achetée il y a moins de `duree_min_jours` garde sa part (sauf alerte FORTE ; le stop-loss,
+            lui, reste toujours actif) ;
+          - une ligne dont la part change de moins de `ecart_min_ligne` ne bouge pas : ça coûterait plus que ça ne
+            rapporterait."""
+        total = broker.total_value()
+        current = {p["ticker"]: p["valeur_eur"] / total for p in broker.positions()}
+        bought = self.last_buys(broker)
+        min_days, min_gap = self.params.get("duree_min_jours", 10), self.params.get("ecart_min_ligne", 0.05)
+        out, kept = dict(targets), []
+        for ticker, share in current.items():
+            recent = ticker in bought and (clock.now() - bought[ticker]).days < min_days
+            if recent and not alert and out.get(ticker, 0) < share:
+                out[ticker] = round(share, 3)
+                kept.append(ticker)
+        for ticker in set(out) | set(current):
+            selling_all = ticker in current and out.get(ticker, 0) == 0     # sortie franche : permise
+            if ticker not in kept and not selling_all and abs(out.get(ticker, 0) - current.get(ticker, 0)) < min_gap:
+                if current.get(ticker, 0) > 0:
+                    out[ticker] = round(current[ticker], 3)
+                else:
+                    out.pop(ticker, None)
+        if kept:
+            self.think(f"Garde-fou : je garde {', '.join(kept)} (achetés il y a moins de {min_days} jours).")
+        total_share = sum(out.values())
+        if total_share > 1 - CASH_BUFFER:   # les parts gardées peuvent dépasser 100 % : on réduit les nouvelles
+            extra = total_share - (1 - CASH_BUFFER)
+            new = {t: w for t, w in out.items() if t not in kept and w > current.get(t, 0)}
+            room = sum(w - current.get(t, 0) for t, w in new.items()) or 1
+            for t, w in new.items():
+                out[t] = round(w - extra * (w - current.get(t, 0)) / room, 3)
+        return out
+
     # ----- événements -----
 
     def on_start(self, broker, state):
@@ -196,6 +251,7 @@ class EcoStrategy(Strategy):
         state["alertes"] = state["alertes"][-15:]
         if alert.level == "FORTE" and self.freshness(alert, now) > 0:
             state["force"] = True
+            state["alerte_forte"] = True     # autorise à revendre une position récente
             self.note(f"{self.describe(alert, now)} : je refais mon analyse tout de suite.")
 
     def stop_losses(self, broker, state) -> None:
@@ -235,10 +291,10 @@ class EcoStrategy(Strategy):
             log.warning("IA du Robot Éco indisponible : %s", exc)
             self.think(f"⚠️ Mon IA ne répond pas (Ollama est-il lancé ?) : je garde mes positions. ({exc})")
             return
-        targets = self.safe_targets(decision)
+        targets = self.calm_targets(broker, self.safe_targets(decision), alert=state.get("alerte_forte", False))
         state["derniere_reflexion"] = now.isoformat()
         state["derniere_analyse"] = decision.get("analyse", "")
-        state["force"] = False
+        state["force"] = state["alerte_forte"] = False
         state["pensee"] = ([f"🧠 {decision.get('analyse', '')}", f"Conviction : {decision.get('conviction', '?')}"]
                            + [f"• {r}" for r in decision.get("raisons", [])[:6]]
                            + [f"Répartition voulue : {self.describe_targets(targets, self.view) or 'tout en liquide'}"])
