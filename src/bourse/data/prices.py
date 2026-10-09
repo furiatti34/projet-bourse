@@ -67,6 +67,9 @@ def intraday_bars(ticker: str) -> pd.DataFrame:
     Cours BRUTS (auto_adjust=False) : exactement ceux cotés en Bourse, non retouchés des dividendes."""
     def load():
         bars = yf.Ticker(ticker).history(period="5d", interval="5m", auto_adjust=False)
+        if bars.empty:   # coupure réseau ou Yahoo muet : tableau vide (sans fuseau), traité comme « pas de cours »
+            bars.index = pd.DatetimeIndex([], tz="UTC")
+            return bars
         bars.index = bars.index.tz_convert("UTC")
         return bars
     return _cached(f"bars:{ticker}", 60, load)
