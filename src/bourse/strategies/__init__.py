@@ -5,7 +5,10 @@ from .eco import EcoStrategy
 from .kamikaze import KamikazeStrategy
 from .opportuniste import OpportunisteStrategy
 from .prudent import PrudentStrategy
+from .retraite import RetraiteStrategy
+from .temoin import TemoinStrategy
 
 STRATEGIES: dict[str, type[Strategy]] = {
-    s.name: s for s in (PrudentStrategy, OpportunisteStrategy, AudacieuxStrategy, KamikazeStrategy, EcoStrategy)
+    s.name: s for s in (PrudentStrategy, OpportunisteStrategy, AudacieuxStrategy, KamikazeStrategy, EcoStrategy,
+                             RetraiteStrategy, TemoinStrategy)
 }

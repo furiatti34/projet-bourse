@@ -35,7 +35,7 @@ def ensure_portfolios(conn: sqlite3.Connection, settings: dict) -> list[sqlite3.
             conn.execute(
                 "INSERT INTO portfolios (name, strategy, initial_cash, created, benchmark, benchmark_start)"
                 " VALUES (?, ?, ?, ?, ?, ?)",
-                (p["nom"], p.get("strategie"), settings["general"]["capital_fictif"],
+                (p["nom"], p.get("strategie"), p.get("capital", settings["general"]["capital_fictif"]),
                  clock.now().isoformat(), benchmark, quote(benchmark).price_eur),
             )
         else:  # le fichier de réglages fait foi : on peut changer le caractère d'un robot existant
@@ -66,7 +66,8 @@ def take_snapshot(conn: sqlite3.Connection, portfolio: sqlite3.Row, broker: Pape
     conn.execute(
         "INSERT INTO snapshots (portfolio_id, time, value_eur, cash_eur, benchmark_eur) VALUES (?, ?, ?, ?, ?)",
         (portfolio["id"], clock.now().isoformat(), broker.total_value(),
-         broker.cash(), benchmark_value(portfolio)),
+         broker.cash(), benchmark_value(conn.execute("SELECT * FROM portfolios WHERE id = ?",   # capital à jour
+                                                     (portfolio["id"],)).fetchone())),
     )
     conn.commit()
 

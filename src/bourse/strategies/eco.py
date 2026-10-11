@@ -78,6 +78,7 @@ class EcoStrategy(Strategy):
     description = ("Boosté à l'IA : lit le climat du marché, les alertes et les économistes, puis choisit "
                    "lui-même sa répartition (levier compris), avec des garde-fous stricts.")
     on_wait = None       # simulation : fonction appelée (avec un message) pendant qu'on attend l'IA
+    system_prompt = SYSTEM   # consignes de l'IA (le Robot Retraité a les siennes)
 
     # ----- le dossier donné à l'IA -----
 
@@ -164,7 +165,7 @@ class EcoStrategy(Strategy):
             # num_predict : une réponse normale fait ~1 000 jetons ; au-delà, l'IA s'emballe (elle peut sinon
             # écrire jusqu'à remplir sa mémoire, ~30 min pour une réponse inutilisable)
             "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED, "num_predict": MAX_TOKENS},
-            "messages": [{"role": "system", "content": SYSTEM}, {"role": "user", "content": dossier}]})
+            "messages": [{"role": "system", "content": self.system_prompt}, {"role": "user", "content": dossier}]})
         resp.raise_for_status()
         body = resp.json()
         if body.get("done_reason") == "length":
