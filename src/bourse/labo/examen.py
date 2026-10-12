@@ -48,7 +48,10 @@ def archives_pretes(seuil: float = 0.95) -> bool:
     conn = sqlite3.connect(f"file:{PROJECT_ROOT / 'data' / 'historique' / 'actualites.db'}?mode=ro", uri=True)
     try:
         jours = (date.today() - EXAM[0]).days
-        rows = conn.execute("SELECT origin, COUNT(*) FROM hist_coverage WHERE day >= ? GROUP BY origin",
+        # Sources quotidiennes seulement (Google, flux archivés) : « fed » et « bce:ANNÉE » sont notés une fois
+        # pour toute la période ou l'année, ils ne peuvent pas compter 95 % des jours.
+        rows = conn.execute("SELECT origin, COUNT(*) FROM hist_coverage WHERE day >= ?"
+                            " AND (origin LIKE 'google:%' OR origin LIKE 'wayback:%') GROUP BY origin",
                             (EXAM[0].isoformat(),)).fetchall()
     finally:
         conn.close()
