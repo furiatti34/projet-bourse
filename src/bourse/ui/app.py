@@ -273,6 +273,7 @@ def summary_of(portfolio_id: int) -> dict:
     total = cash + sum(x["valeur_eur"] for x in positions)
     bench = p["initial_cash"] * quote(p["benchmark"]).price_eur / p["benchmark_start"]
     return {"positions": positions, "cash": cash, "total": total,
+            "capital": p["initial_cash"],          # à jour (le conseiller reçoit des versements)
             "perf": (total / p["initial_cash"] - 1) * 100,
             "bench_perf": (bench / p["initial_cash"] - 1) * 100}
 
@@ -739,7 +740,7 @@ if page == P_RACE:
                        f"**{t0:%d/%m/%Y à %H:%M}**, départ des versions du labo, comme si chacun repartait de "
                        f"{eur(settings['general']['capital_fictif'])} ce jour-là.")
         elif group == G_CONSEIL:
-            st.caption(f"Ton conseiller long terme, en argent fictif : {eur(shown[0]['initial_cash'])} versés à ce "
+            st.caption(f"Ton conseiller long terme, en argent fictif : {eur(summary_of(shown[0]['id'])['capital'])} versés à ce "
                        f"jour (départ le {first:%d/%m/%Y}, puis un versement chaque mois). Le gain se mesure sur "
                        "l'argent versé ; l'indice mondial reçoit les mêmes versements aux mêmes dates. Pour un "
                        "horizon court, il est normal qu'il fasse moins que l'indice quand la Bourse monte : il "
@@ -844,7 +845,7 @@ elif page == P_ROBOT:
     s = summary_of(robot["id"])
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Valeur", eur2(s["total"]), pct(s["perf"]))
-    c2.metric("Gain / perte", eur2(s["total"] - robot["initial_cash"]))
+    c2.metric("Gain / perte", eur2(s["total"] - s["capital"]))
     c3.metric("Liquidités", eur2(s["cash"]))
     c4.metric("Face à l'indice", pct(s["perf"] - s["bench_perf"]),
               help=f"L'indice mondial a fait {pct(s['bench_perf'])} sur la même période")
@@ -881,7 +882,9 @@ elif page == P_ROBOT:
             prefs = settings_panel(box_key, kind="courbes", units=True,
                                    series=[robot["name"], "Indice mondial (même capital)"])
             if prefs["unite"] == "%":
-                curve = (curve / robot["initial_cash"] - 1) * 100
+                base = (deposits_curve(robot, curve.index) if robot["strategy"] == "conseiller"
+                        else robot["initial_cash"])
+                curve = (curve.div(base, axis=0) - 1) * 100
             fig = line_chart([(robot["name"], curve["value"], color_of[robot["id"]], "solid"),
                               ("Indice mondial (même capital)", curve["benchmark"], INDEX_COLOR, "dash")],
                              "Performance (%)" if prefs["unite"] == "%" else "Valeur (€)")

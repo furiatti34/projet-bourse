@@ -3,6 +3,7 @@
 À chaque instant : liquidités + (titres détenus à cet instant × cours réel à cet instant).
 Rien n'est inventé : seuls les ordres réellement exécutés et les cours publiés sont utilisés.
 """
+import json
 import sqlite3
 from datetime import datetime, timedelta, timezone
 
@@ -31,8 +32,23 @@ def fills(conn: sqlite3.Connection, portfolio_id: int) -> pd.DataFrame:
     return df
 
 
+def deposits_of(portfolio: sqlite3.Row) -> pd.Series | None:
+    """Versements datés (€) d'un portefeuille qui en reçoit (le conseiller les note dans sa mémoire), sinon None."""
+    try:
+        v = json.loads(portfolio["state"] or "{}").get("versements")
+    except (KeyError, IndexError, ValueError, TypeError):
+        return None
+    if not v:
+        return None
+    s = pd.Series([float(x["eur"]) for x in v],
+                  index=pd.to_datetime([x["time"] for x in v], utc=True, format="ISO8601"))
+    return s.groupby(level=0).sum().sort_index()
+
+
 def equity_curve(conn: sqlite3.Connection, portfolio: sqlite3.Row) -> pd.DataFrame:
-    """Colonnes : value (portefeuille, €) et benchmark (même capital placé dans l'indice, €)."""
+    """Colonnes : value (portefeuille, €) et benchmark (même capital placé dans l'indice, €).
+    Avec des versements : à chaque instant, seul l'argent déjà versé compte, et l'indice reçoit chaque versement
+    à sa date (jamais le capital d'aujourd'hui appliqué au passé)."""
     start = pd.Timestamp(portfolio["created"])
     period, interval = _resolution(datetime.now(timezone.utc) - start.to_pydatetime())
     trades = fills(conn, portfolio["id"])
@@ -52,7 +68,19 @@ def equity_curve(conn: sqlite3.Connection, portfolio: sqlite3.Row) -> pd.DataFra
         return pd.DataFrame(columns=["value", "benchmark"])
 
     index = closes.index
-    cash = pd.Series(float(portfolio["initial_cash"]), index=index)
+    deposits = deposits_of(portfolio)
+    bench = closes[portfolio["benchmark"]]
+
+    def as_of(series: pd.Series) -> pd.Series:     # cumul connu à chaque instant de la courbe
+        return series.cumsum().reindex(index.union(series.index)).ffill().fillna(0).reindex(index)
+
+    if deposits is None:
+        cash = pd.Series(float(portfolio["initial_cash"]), index=index)
+        bench_value = portfolio["initial_cash"] * bench / portfolio["benchmark_start"]
+    else:
+        cash = as_of(deposits)
+        price_then = bench.reindex(bench.index.union(deposits.index)).ffill().bfill().reindex(deposits.index)
+        bench_value = as_of(deposits / price_then) * bench
     value = cash.copy()
     for ticker, group in trades.groupby("ticker"):
         signed = group["filled_qty"].where(group["side"] == BUY, -group["filled_qty"])
@@ -67,8 +95,4 @@ def equity_curve(conn: sqlite3.Connection, portfolio: sqlite3.Row) -> pd.DataFra
         # (taux de change actuel : approximation pour les titres hors euro)
         value += spent + held * price.fillna(group["fill_price"].iloc[0]) * fx_to_eur(group["currency"].iloc[-1])
 
-    bench = closes[portfolio["benchmark"]]
-    return pd.DataFrame({
-        "value": value,
-        "benchmark": portfolio["initial_cash"] * bench / portfolio["benchmark_start"],
-    }).dropna()
+    return pd.DataFrame({"value": value, "benchmark": bench_value}).dropna()

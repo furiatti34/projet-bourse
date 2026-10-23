@@ -11,6 +11,8 @@ Il ne cherche pas à deviner la Bourse : il applique un plan écrit d'après le 
     pour un horizon court, une baisse de la Bourse se traverse avec peu d'actions, pas en jouant les devins.
 Performance : gain sur l'argent versé ; l'indice de comparaison reçoit les mêmes versements, aux mêmes dates.
 """
+import calendar
+import json
 from datetime import date
 
 from bourse import clock
@@ -58,25 +60,32 @@ class ConseillerStrategy(Strategy):
         bench_value = capital * bench_now / row["benchmark_start"]
         new_capital = capital + amount
         new_start = new_capital * bench_now / (bench_value + amount)
-        broker.conn.execute("UPDATE portfolios SET initial_cash = ?, benchmark_start = ? WHERE id = ?",
-                            (round(new_capital, 2), new_start, broker.portfolio_id))
-        broker.conn.commit()
         state.setdefault("versements", []).append({"time": clock.now().isoformat(), "eur": amount})
+        # capital, indice ET mémoire enregistrés ensemble : si le passage plante ensuite, le versement n'est
+        # ni perdu ni refait (sinon la mémoire n'est sauvée qu'à la fin du passage → versement compté 2 fois)
+        broker.conn.execute("UPDATE portfolios SET initial_cash = ?, benchmark_start = ?, state = ? WHERE id = ?",
+                            (round(new_capital, 2), new_start, json.dumps(state, ensure_ascii=False),
+                             broker.portfolio_id))
+        broker.conn.commit()
         self.note(f"{why} : + {eur_txt(amount)} (total versé : {eur_txt(new_capital)}).")
 
     def monthly_deposit(self, broker, state: dict) -> None:
-        """Un versement par mois, le même jour que le départ (rattrapé au passage suivant si le PC dormait)."""
+        """Un versement par mois, le même jour que le départ (le 31 → le dernier jour des mois plus courts) ;
+        rattrapé au passage suivant si le PC dormait."""
         today = clock.now().date()
         last = date.fromisoformat(state["dernier_versement"])
-        due = date(last.year + (last.month // 12), last.month % 12 + 1, min(last.day, 28))
+        anchor = state.setdefault("jour_versement", last.day)
+        year, month = last.year + (last.month // 12), last.month % 12 + 1
+        due = date(year, month, min(anchor, calendar.monthrange(year, month)[1]))
         if today >= due:
+            state["dernier_versement"] = due.isoformat()     # avancé AVANT l'enregistrement du versement
             self.deposit(broker, state, float(self.params["versement_mensuel"]), "Versement mensuel")
-            state["dernier_versement"] = due.isoformat()
 
     # ----- événements -----
 
     def on_start(self, broker, state):
         state["dernier_versement"] = clock.now().date().isoformat()
+        state["jour_versement"] = clock.now().day
         state["versements"] = [{"time": clock.now().isoformat(), "eur": broker.initial_cash()}]
         self.note(f"Démarrage : {eur_txt(broker.initial_cash())} de départ, puis "
                   f"{eur_txt(self.params['versement_mensuel'])} chaque mois. Besoin de l'argent vers le "
@@ -104,10 +113,18 @@ class ConseillerStrategy(Strategy):
             return
         total = broker.total_value()
         held = {x["ticker"]: x["valeur_eur"] for x in broker.positions()}
-        # 1) une ligne trop loin de sa part (ou la baisse prévue des actions) → on vend l'excédent
+        # 1) une ligne trop loin de sa part → on vend l'excédent ; pendant la baisse prévue des actions (moins de
+        #    `mois_actions_max` mois), tout excédent d'actions est vendu, au plus une fois par mois, pour arriver
+        #    vraiment à 0 % d'actions à la date prévue
+        gliding = left < p["mois_actions_max"]
+        month = clock.now().strftime("%Y-%m")
         for t, w in targets.items():
             excess = held.get(t, 0) - w * total
-            if excess > p["ecart_max"] * total and excess >= p["ordre_min_eur"]:
+            glide = (gliding and t == p["titre_actions"] and state.get("vente_plan") != month
+                     and excess >= max(p["ordre_min_eur"], quote(t).price_eur))
+            if (excess > p["ecart_max"] * total or glide) and excess >= p["ordre_min_eur"]:
+                if glide:
+                    state["vente_plan"] = month
                 broker.place_order(t, SELL, amount_eur=excess, reason="Plan : ramener la ligne à sa part")
                 self.note(f"Je vends pour {eur_txt(excess)} de {names[t]} : la ligne dépasse sa part prévue.")
                 return
@@ -120,7 +137,10 @@ class ConseillerStrategy(Strategy):
             gaps = dict(targets)
         buys = {t: cash * g / sum(gaps.values()) for t, g in gaps.items()}
         # une part entière au moins, et pas d'ordre minuscule : sinon, cet argent va à l'autre ligne
-        small = [t for t, eur in buys.items() if eur < max(p["ordre_min_eur"], quote(t).price_eur)]
+        # prix d'une part tout compris (glissement, frais, minimum de 1 €) : sinon le courtier achète 0 titre et
+        # rejette l'ordre, repassé à chaque passage
+        unit = {t: quote(t).price_eur * 1.003 + 1.0 for t in buys}
+        small = [t for t, eur in buys.items() if eur < max(p["ordre_min_eur"], unit[t])]
         if small and len(small) < len(buys):
             rest = sum(buys.pop(t) for t in small)
             for t in buys:

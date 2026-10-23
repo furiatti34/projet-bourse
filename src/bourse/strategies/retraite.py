@@ -177,8 +177,11 @@ class RetraiteStrategy(EcoStrategy):
 
     def safe_targets(self, decision: dict) -> dict[str, float]:
         """Retient aussi les tickers que l'IA a cités (même à 0) : voir keep_unmentioned."""
-        self.mentioned = {str(i.get("ticker", "")).strip().upper() for i in decision.get("allocation", [])
-                          if isinstance(i, dict)}
+        items = [i for i in decision.get("allocation", []) if isinstance(i, dict)]
+        self.mentioned = {str(i.get("ticker", "")).strip().upper() for i in items}
+        # citée avec une part > 0 : il veut la garder, même si sa part est sous le seuil de 2 % d'Éco
+        self.cited_positive = {str(i.get("ticker", "")).strip().upper() for i in items
+                               if isinstance(i.get("part"), (int, float)) and i["part"] > 0}
         return super().safe_targets(decision)
 
     def keep_unmentioned(self, broker, targets: dict[str, float]) -> dict[str, float]:
@@ -190,12 +193,26 @@ class RetraiteStrategy(EcoStrategy):
             return targets
         total = broker.total_value()
         out, kept = dict(targets), []
-        for p in broker.positions():
-            if p["ticker"] not in mentioned:
-                out[p["ticker"]] = round(p["valeur_eur"] / total, 3)
-                kept.append(p["ticker"])
+        cited = getattr(self, "cited_positive", set())
+        current = {p["ticker"]: round(p["valeur_eur"] / total, 3) for p in broker.positions()}
+        for t, share in current.items():
+            if t not in mentioned or (t in cited and t not in out):
+                out[t] = share
+                kept.append(t)
         if kept:
-            self.think(f"Lignes non citées par l'IA, donc gardées telles quelles : {', '.join(kept)}.")
+            self.think(f"Lignes non citées par l'IA (ou citées pour être gardées), gardées telles quelles : "
+                       f"{', '.join(kept)}.")
+        # plus de 99 % voulu : on réduit les HAUSSES et les nouveaux achats au prorata, jamais une ligne sous sa
+        # part actuelle quand l'IA voulait l'augmenter (sinon le plafond d'Éco pouvait la vendre)
+        extra = sum(out.values()) - 0.99
+        if extra > 0:
+            ups = {t: w - current.get(t, 0) for t, w in out.items() if w > current.get(t, 0)}
+            room = sum(ups.values())
+            if room > 0:
+                k = max(0.0, 1 - extra / room)
+                for t, up in ups.items():
+                    out[t] = round(current.get(t, 0) + up * k, 3)
+                self.think(f"L'IA voulait plus de 99 % investi : ses achats sont réduits à {k:.0%}.")
         return out
 
     def calm_targets(self, broker, targets: dict[str, float], alert: bool) -> dict[str, float]:
