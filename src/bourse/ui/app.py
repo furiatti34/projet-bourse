@@ -266,9 +266,8 @@ def curve_of(portfolio_id: int) -> pd.DataFrame:
 
 @st.cache_data(ttl=120, show_spinner=False)
 def summary_of(portfolio_id: int) -> dict:
-    p = next(p for p in load_portfolios() if p["id"] == portfolio_id)
-    broker = make_broker(conn, conn.execute("SELECT * FROM portfolios WHERE id = ?", (portfolio_id,)).fetchone(),
-                         settings)
+    p = conn.execute("SELECT * FROM portfolios WHERE id = ?", (portfolio_id,)).fetchone()   # à jour (versements)
+    broker = make_broker(conn, p, settings)
     positions = broker.positions()
     cash = broker.cash()
     total = cash + sum(x["valeur_eur"] for x in positions)
@@ -637,19 +636,33 @@ def label(robot: dict) -> str:
     return name + (f'<span class="tr-badge">méthode {v}</span>' if v else "")
 
 # Groupes de la course : on ne compare que des robots partis au même moment (ou ramenés au même départ)
-G_ORIG, G_LABO, G_RETRAITE, G_ALL = "Robots d'origine", "Méthodes du labo", "Retraité", "Tous"
+G_ORIG, G_LABO, G_RETRAITE, G_CONSEIL, G_ALL = ("Robots d'origine", "Méthodes du labo", "Retraité", "Mon conseiller",
+                                                "Tous")
 
 
 def race_groups(robots: list[dict]) -> dict[str, list[dict]]:
     retraite = [r for r in robots if r["strategy"] in ("retraite", "temoin")]
-    orig = [r for r in robots if not variant_of(r["name"]) and r not in retraite]
+    conseil = [r for r in robots if r["strategy"] == "conseiller"]
+    orig = [r for r in robots if not variant_of(r["name"]) and r not in retraite + conseil]
     labo = []
     for r in orig:
         variants = [v for v in robots if variant_of(v["name"]) and base_name(v["name"]) == r["name"]]
         if variants:
             labo += [r] + variants
-    groups = {G_ORIG: orig, G_LABO: labo, G_RETRAITE: retraite, G_ALL: robots}
+    groups = {G_ORIG: orig, G_LABO: labo, G_RETRAITE: retraite, G_CONSEIL: conseil, G_ALL: robots}
     return {g: rs for g, rs in groups.items() if rs}
+
+
+def deposits_curve(robot: dict, index: pd.DatetimeIndex) -> pd.Series:
+    """Argent versé cumulé à chaque date (versements notés par le conseiller dans sa mémoire)."""
+    state = json.loads(conn.execute("SELECT state FROM portfolios WHERE id = ?", (robot["id"],)).fetchone()[0] or "{}")
+    v = state.get("versements", [])
+    paid = pd.Series([x["eur"] for x in v], index=pd.DatetimeIndex([pd.Timestamp(x["time"]) for x in v]),
+                     dtype=float).tz_convert(TZ) if v else pd.Series(dtype=float)
+    paid = paid.groupby(level=0).sum().sort_index().cumsum()
+    if paid.empty:
+        return pd.Series(robot["initial_cash"], index=index)
+    return paid.reindex(paid.index.union(index)).ffill().bfill().reindex(index)
 
 
 def start_of(robot: dict) -> pd.Timestamp:
@@ -725,6 +738,12 @@ if page == P_RACE:
                        f"{VARIANT_TAG['A']} = méthode A, en {VARIANT_TAG['B']} = méthode B). Tout est mesuré depuis le "
                        f"**{t0:%d/%m/%Y à %H:%M}**, départ des versions du labo, comme si chacun repartait de "
                        f"{eur(settings['general']['capital_fictif'])} ce jour-là.")
+        elif group == G_CONSEIL:
+            st.caption(f"Ton conseiller long terme, en argent fictif : {eur(shown[0]['initial_cash'])} versés à ce "
+                       f"jour (départ le {first:%d/%m/%Y}, puis un versement chaque mois). Le gain se mesure sur "
+                       "l'argent versé ; l'indice mondial reçoit les mêmes versements aux mêmes dates. Pour un "
+                       "horizon court, il est normal qu'il fasse moins que l'indice quand la Bourse monte : il "
+                       "est fait pour moins chuter.")
         elif group == G_RETRAITE:
             st.caption(f"Le Robot Retraité gère le vrai portefeuille de départ ; « Gilbert (inchangé) » est le même "
                        f"portefeuille auquel on ne touche pas : c'est lui qu'il faut battre. Départ le "
@@ -779,6 +798,15 @@ if page == P_RACE:
                 if curve.empty:
                     continue
                 value, bench = curve["value"], curve["benchmark"]
+                if robot["strategy"] == "conseiller":     # versements : on compare à l'argent versé à chaque date
+                    paid = deposits_curve(robot, value.index)
+                    if in_pct:
+                        value, bench = (value / paid - 1) * 100, (bench / paid - 1) * 100
+                    else:
+                        lines.append(("Argent versé", paid, MUTED, "dot"))
+                    lines.append((robot["name"], value, color_of[robot["id"]], "solid"))
+                    bench_line = bench_line or ("Indice mondial (mêmes versements)", bench, INDEX_COLOR, "dash")
+                    continue
                 # depuis t0 : chacun repart du capital fictif ce jour-là ; sinon : depuis son propre départ
                 base_v, base_b = ((value.iloc[0], bench.iloc[0]) if t0 is not None
                                   else (robot["initial_cash"], robot["initial_cash"]))
