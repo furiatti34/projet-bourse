@@ -125,7 +125,10 @@ class ConseillerStrategy(Strategy):
             if (excess > p["ecart_max"] * total or glide) and excess >= p["ordre_min_eur"]:
                 if glide:
                     state["vente_plan"] = month
-                broker.place_order(t, SELL, amount_eur=excess, reason="Plan : ramener la ligne à sa part")
+                # part voulue 0 % : on sort de toute la ligne (un montant serait arrondi à la part entière en
+                # dessous et laisserait un reste d'actions jusqu'à la date du besoin)
+                broker.place_order(t, SELL, amount_eur=None if w == 0 else excess,
+                                   reason="Plan : ramener la ligne à sa part")
                 self.note(f"Je vends pour {eur_txt(excess)} de {names[t]} : la ligne dépasse sa part prévue.")
                 return
         # 2) l'argent disponible va aux lignes en retard sur leur part, au prorata de leur retard
