@@ -175,13 +175,15 @@ class RetraiteStrategy(EcoStrategy):
 
     def calm_targets(self, broker, targets: dict[str, float], alert: bool) -> dict[str, float]:
         """En plus des freins du Robot Éco : un retraité change par petites touches. Au plus `rotation_max` du
-        portefeuille vendu par réflexion (sauf alerte FORTE) ; au-delà, tous les changements sont réduits d'autant."""
+        portefeuille vendu par réflexion, MÊME après une alerte FORTE (23/10/2026 : un séisme au Tibet noté FORTE
+        lui avait fait vendre 75 % du portefeuille d'un coup) ; au-delà, tous les changements sont réduits d'autant.
+        Le stop-loss, lui, reste immédiat."""
         out = super().calm_targets(broker, targets, alert)
         limit = self.params.get("rotation_max", 0.20)
         total = broker.total_value()
         current = {p["ticker"]: p["valeur_eur"] / total for p in broker.positions()}
         sold = sum(max(0.0, share - out.get(t, 0)) for t, share in current.items())
-        if alert or sold <= limit:
+        if sold <= limit:
             return out
         k = limit / sold
         self.think(f"Garde-fou : l'IA voulait vendre {sold:.0%} du portefeuille d'un coup ; un retraité avance "

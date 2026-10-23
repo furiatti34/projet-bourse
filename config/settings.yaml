@@ -92,6 +92,94 @@ paper_trading:
       stop_perte: 0.08
       delai_max_heures: 24
       tolerance: 0.15
+  - nom: Robot Prudent (méthode A)
+    risque: faible
+    strategie: prudent_a
+    parametres:
+      titre_actions: IUSQ.DE
+      titre_obligations: EUNH.DE
+      titre_monetaire: XEON.DE
+      titre_refuge: 4GLD.DE
+      actions_min: 0.45
+      actions_max: 0.85
+      or_base: 0.1
+      part_alerte_importante: 0.1
+      part_alerte_forte: 0.2
+      part_refuge_max: 0.4
+      duree_jours: 10
+      delai_max_heures: 48
+      tolerance: 0.05
+      lissage_jours: 5
+  - nom: Robot Opportuniste (méthode A)
+    risque: moyen
+    strategie: opportuniste_a
+    parametres:
+      titre_coeur: IUSQ.DE
+      coeur_min: 0.5
+      coeur_max: 0.75
+      mise_par_occasion: 0.08
+      max_occasions: 4
+      rsi_soldes: 35
+      objectif_gain: 0.08
+      stop_perte: 0.06
+      duree_jours: 30
+      delai_max_heures: 24
+      tolerance: 0.07
+      reserve_une_mise: true
+      soldes_si_monde_haussier: true
+      marches:
+        ^N225: XMK9.DE
+        ^HSI: ICGA.DE
+        ^GSPC: SXR8.DE
+        ^STOXX50E: EXW1.DE
+        CL=F: CRUD.MI
+  - nom: Robot Audacieux (méthode A)
+    risque: élevé
+    strategie: audacieux_a
+    parametres:
+      titre_attaque: LQQ.PA
+      titre_baisse: DBPK.DE
+      titre_monetaire: XEON.DE
+      seuil_attaque: 15
+      seuil_defense: -25
+      duree_pari_jours: 3
+      stop_perte: 0.08
+      delai_max_heures: 6
+      tolerance: 0.1
+      marge_posture: 10
+      garder_rang: 5
+  - nom: Robot Audacieux (méthode B)
+    risque: élevé
+    strategie: audacieux_b
+    parametres:
+      titre_attaque: LQQ.PA
+      titre_baisse: DBPK.DE
+      titre_monetaire: XEON.DE
+      seuil_attaque: 15
+      seuil_defense: -25
+      duree_pari_jours: 3
+      stop_perte: 0.08
+      delai_max_heures: 6
+      tolerance: 0.1
+      garder_rang: 5
+  - nom: Robot Kamikaze (méthode A)
+    risque: extrême
+    strategie: kamikaze_a
+    parametres:
+      part_numero_1: 0.7
+      part_numero_2: 0.29
+      stop_perte: 0.07
+      securisation_des: 0.12
+      securisation_recul: 0.05
+      duree_min_heures: 20
+      ecart_rotation: 3
+      banni_heures: 48
+      titre_crise: QQQS.MI
+      pari_crise_heures: 48
+      stop_crise: 0.1
+      delai_max_heures: 3
+      baisse_si_tempete: true
+      garder_rang: 5
 analyse:
   univers:
   - ticker: IUSQ.DE
