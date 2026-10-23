@@ -55,13 +55,13 @@ ta dernière analyse ; une position récente ne peut de toute façon pas être r
 Raisonne sur les faits du dossier, confronte les avis des économistes aux chiffres, et explique tes choix \
 en français, en phrases courtes."""
 
-def schema(tickers: list[str]) -> dict:
+def schema(tickers: list[str], max_lines: int = 12) -> dict:
     """Forme imposée à la réponse de l'IA. Les bornes (nombre de lignes, longueurs, tickers de la liste) sont
     appliquées PENDANT l'écriture : sans elles, le petit modèle se met parfois à répéter la même ligne sans fin
     (« ZPDU.DE 5 %, ZPDE.DE 5 %, ZPDU.DE 5 %… », une réflexion sur deux dans une simulation de mai-juin 2025)."""
     return {"type": "object", "required": ["analyse", "allocation", "raisons", "conviction"], "properties": {
         "analyse": {"type": "string", "maxLength": 900, "description": "Lecture de la situation en 3 à 5 phrases"},
-        "allocation": {"type": "array", "maxItems": 12, "items": {
+        "allocation": {"type": "array", "maxItems": max_lines, "items": {
             "type": "object", "required": ["ticker", "part"], "properties": {
                 "ticker": {"type": "string", "enum": tickers} if tickers else {"type": "string"},
                 "part": {"type": "number"}}}},
@@ -79,6 +79,7 @@ class EcoStrategy(Strategy):
                    "lui-même sa répartition (levier compris), avec des garde-fous stricts.")
     on_wait = None       # simulation : fonction appelée (avec un message) pendant qu'on attend l'IA
     system_prompt = SYSTEM   # consignes de l'IA (le Robot Retraité a les siennes)
+    max_lines = 12           # lignes au plus dans la réponse de l'IA (le Robot Retraité en a besoin de plus)
 
     # ----- le dossier donné à l'IA -----
 
@@ -161,7 +162,7 @@ class EcoStrategy(Strategy):
         model = self.params.get("modele", "qwen3:8b")
         resp = requests.post(f"{OLLAMA}/api/chat", timeout=(5, read_timeout), json={
             "model": model, "stream": False, "think": False, "keep_alive": "30m",
-            "format": schema(sorted(self.view.assets) if self.view else []),
+            "format": schema(sorted(self.view.assets) if self.view else [], self.max_lines),
             # num_predict : une réponse normale fait ~1 000 jetons ; au-delà, l'IA s'emballe (elle peut sinon
             # écrire jusqu'à remplir sa mémoire, ~30 min pour une réponse inutilisable)
             "options": {"num_ctx": 16384, "temperature": 0.3, "seed": SEED, "num_predict": MAX_TOKENS},

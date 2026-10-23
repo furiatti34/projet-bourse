@@ -44,7 +44,8 @@ Tu reçois un dossier : inflation et objectif, climat du marché, ses placements
 placements possibles, les alertes, des avis d'économistes. Décide la répartition cible.
 
 Règles : uniquement les tickers de la liste ; parts entre 0 et 0.2 ; somme des parts ≤ 0.99 (le reste en liquide). \
-Pas de levier, pas de pari à la baisse, pas de crypto. Préfère des placements solides et diversifiés (pays, \
+Une ligne que tu ne cites pas est GARDÉE telle quelle ; pour vendre entièrement un placement, cite-le \
+avec la part 0. Pas de levier, pas de pari à la baisse, pas de crypto. Préfère des placements solides et diversifiés (pays, \
 secteurs) ; garde une réserve sûre (monétaire, obligations) pour ne jamais devoir vendre au pire moment. \
 Chaque achat ou vente coûte : repars de sa répartition actuelle, garde ce qui va bien, ne change que ce qui a une \
 raison nette. Raisonne sur les faits du dossier, et explique tes choix en français, simplement, en phrases courtes."""
@@ -116,6 +117,7 @@ class RetraiteStrategy(EcoStrategy):
     description = ("Un retraité qui veut garder son pouvoir d'achat : part d'un vrai portefeuille de particulier, "
                    "vise l'inflation + un petit supplément, prudent et patient (IA, une réflexion par semaine).")
     system_prompt = SYSTEM
+    max_lines = 30           # ses 22 lignes de départ doivent pouvoir tenir dans la réponse (12 chez Éco)
 
     def __init__(self, params: dict, view=None):
         if clock.is_simulated():
@@ -173,12 +175,35 @@ class RetraiteStrategy(EcoStrategy):
                   f"({len(lines)} lignes, mêmes quantités, sans frais : "
                   + f"{broker.total_value():,.0f}".replace(",", " ") + " €). Première réflexion dans une semaine.")
 
+    def safe_targets(self, decision: dict) -> dict[str, float]:
+        """Retient aussi les tickers que l'IA a cités (même à 0) : voir keep_unmentioned."""
+        self.mentioned = {str(i.get("ticker", "")).strip().upper() for i in decision.get("allocation", [])
+                          if isinstance(i, dict)}
+        return super().safe_targets(decision)
+
+    def keep_unmentioned(self, broker, targets: dict[str, float]) -> dict[str, float]:
+        """Une ligne que l'IA ne cite pas est gardée (23/10/2026 : chez Éco, « pas citée » veut dire « vendue » ; le
+        22/10 le Retraité, limité à 12 lignes pour 22 placements, avait ainsi vendu 17 lignes sans un mot sur elles).
+        Pour vendre, l'IA doit citer la ligne à 0."""
+        mentioned = getattr(self, "mentioned", None)
+        if mentioned is None:
+            return targets
+        total = broker.total_value()
+        out, kept = dict(targets), []
+        for p in broker.positions():
+            if p["ticker"] not in mentioned:
+                out[p["ticker"]] = round(p["valeur_eur"] / total, 3)
+                kept.append(p["ticker"])
+        if kept:
+            self.think(f"Lignes non citées par l'IA, donc gardées telles quelles : {', '.join(kept)}.")
+        return out
+
     def calm_targets(self, broker, targets: dict[str, float], alert: bool) -> dict[str, float]:
         """En plus des freins du Robot Éco : un retraité change par petites touches. Au plus `rotation_max` du
         portefeuille vendu par réflexion, MÊME après une alerte FORTE (23/10/2026 : un séisme au Tibet noté FORTE
         lui avait fait vendre 75 % du portefeuille d'un coup) ; au-delà, tous les changements sont réduits d'autant.
         Le stop-loss, lui, reste immédiat."""
-        out = super().calm_targets(broker, targets, alert)
+        out = super().calm_targets(broker, self.keep_unmentioned(broker, targets), alert)
         limit = self.params.get("rotation_max", 0.20)
         total = broker.total_value()
         current = {p["ticker"]: p["valeur_eur"] / total for p in broker.positions()}

@@ -120,6 +120,8 @@ div[role="radiogroup"] label[data-selected="true"] p {{ color: #000 !important; 
 [data-testid="stCaptionContainer"] p, .tr-sub {{ text-shadow: 0 1px 10px rgba(0, 0, 0, .6); }}
 .tr-name {{ font-weight: 600; font-size: 1rem; display: flex; align-items: center; gap: .5rem; }}
 .tr-dot {{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; }}
+.tr-ring {{ width: 9px; height: 9px; border-radius: 50%; display: inline-block; box-sizing: border-box; border: 2px solid; flex-shrink: 0; }}
+.tr-badge {{ font-size: .68rem; font-weight: 600; color: {INK2}; border: 1px solid rgba(195, 194, 183, .35); border-radius: 4px; padding: 0 .3rem; margin-left: .35rem; vertical-align: 1px; white-space: nowrap; display: inline-block; }}
 .tr-risk {{ color: {MUTED}; font-size: .8rem; margin-top: .15rem; }}
 .tr-value {{ font-size: 1.75rem; font-weight: 600; letter-spacing: -0.03em; margin-top: .9rem; }}
 .tr-perf {{ font-weight: 600; font-size: .95rem; }}
@@ -276,13 +278,14 @@ def summary_of(portfolio_id: int) -> dict:
             "bench_perf": (bench / p["initial_cash"] - 1) * 100}
 
 
-def ranking_html(ranking: list[dict]) -> str:
+def ranking_html(ranking: list[dict], t0: pd.Timestamp | None = None) -> str:
     """Classement façon « échelle des gains » : une barre de verre par robot, le premier mis en lumière,
-    et l'indice mondial glissé à sa place comme un palier en pointillé."""
+    et l'indice mondial glissé à sa place comme un palier en pointillé. Avec `t0`, tout se mesure depuis t0."""
     # le palier = l'indice depuis le départ de la course (comme la courbe grise) ; l'écart de chaque robot,
     # lui, se mesure depuis son propre départ (un robot ajouté plus tard part de l'indice du jour)
-    bench = summary_of(min(ranking, key=lambda r: r["created"])["id"])["bench_perf"]
-    widest = max([abs(summary_of(r["id"])["perf"]) for r in ranking] + [abs(bench), 0.01])
+    perfs = {r["id"]: perf_since(r, t0) for r in ranking}
+    bench = perfs[min(ranking, key=lambda r: r["created"])["id"]][1]
+    widest = max([abs(p) for p, _ in perfs.values()] + [abs(bench), 0.01])
 
     def bar(perf: float) -> str:
         width = abs(perf) / widest * 50
@@ -297,17 +300,17 @@ def ranking_html(ranking: list[dict]) -> str:
     rows, bench_done = [], False
     for i, r in enumerate(ranking, 1):
         s = summary_of(r["id"])
-        if not bench_done and bench > s["perf"]:
+        perf, bench_perf = perfs[r["id"]]
+        if not bench_done and bench > perf:
             rows.append(bench_row)
             bench_done = True
-        diff = s["perf"] - s["bench_perf"]
+        diff = perf - bench_perf
         rows.append(
             f'<div class="rk-row{" rk-first" if i == 1 else ""}"><div class="rk-pos">{i}</div>'
-            f'<div class="rk-who"><span class="tr-dot" style="background:{color_of[r["id"]]}"></span>'
-            f'{r["name"].replace("Robot ", "")}'
+            f'<div class="rk-who">{dot(r)}{label(r)}'
             f'<div class="rk-risk">{risk_label(configs[r["name"]].get("risque", ""))}</div></div>'
-            f'{bar(s["perf"])}<div class="rk-val">{eur2(s["total"])}</div>'
-            f'<div class="rk-perf">{signed(pct(s["perf"]), s["perf"] >= 0)}</div>'
+            f'{bar(perf)}<div class="rk-val">{eur2(s["total"])}</div>'
+            f'<div class="rk-perf">{signed(pct(perf), perf >= 0)}</div>'
             f'<div class="rk-gap">{signed(pct(diff).replace(" %", " pts"), diff >= 0)}'
             f'<div class="rk-risk">vs indice</div></div></div>')
     if not bench_done:
@@ -600,7 +603,70 @@ def go_to_robot(name: str) -> None:
 
 portfolios = load_portfolios()
 robots = [p for p in portfolios if p["strategy"]]
-color_of = {p["id"]: SERIES[i % len(SERIES)] for i, p in enumerate(portfolios)}
+
+
+def base_name(name: str) -> str:
+    """« Robot Prudent (méthode A) » → « Robot Prudent » : une version du labo a la couleur de son robot d'origine."""
+    return name.split(" (méthode ")[0]
+
+
+def variant_of(name: str) -> str | None:
+    return name.split(" (méthode ")[1].rstrip(")") if " (méthode " in name else None
+
+
+VARIANT_DASH = {None: "solid", "A": "dot", "B": "dashdot"}   # le tireté simple reste à l'indice
+VARIANT_TAG = {None: "", "A": "pointillé", "B": "tiret-point"}
+_bases = [p for p in portfolios if not variant_of(p["name"])]
+_base_color = {p["name"]: SERIES[i % len(SERIES)] for i, p in enumerate(_bases)}
+color_of = {p["id"]: _base_color.get(base_name(p["name"]), SERIES[0]) for p in portfolios}
+dash_of = {p["id"]: VARIANT_DASH[variant_of(p["name"])] for p in portfolios}
+
+
+def dot(robot: dict) -> str:
+    """Pastille de couleur : pleine pour un robot d'origine, un anneau de la même couleur pour sa version du labo."""
+    color = color_of[robot["id"]]
+    if not variant_of(robot["name"]):
+        return f'<span class="tr-dot" style="background:{color}"></span> '
+    return f'<span class="tr-ring" style="border-color:{color}"></span> '
+
+
+def label(robot: dict) -> str:
+    """« Prudent » + badge « méthode A » (le nom court, la version à part pour qu'elle saute aux yeux)."""
+    v = variant_of(robot["name"])
+    name = html.escape(base_name(robot["name"]).replace("Robot ", ""))
+    return name + (f'<span class="tr-badge">méthode {v}</span>' if v else "")
+
+# Groupes de la course : on ne compare que des robots partis au même moment (ou ramenés au même départ)
+G_ORIG, G_LABO, G_RETRAITE, G_ALL = "Robots d'origine", "Méthodes du labo", "Retraité", "Tous"
+
+
+def race_groups(robots: list[dict]) -> dict[str, list[dict]]:
+    retraite = [r for r in robots if r["strategy"] in ("retraite", "temoin")]
+    orig = [r for r in robots if not variant_of(r["name"]) and r not in retraite]
+    labo = []
+    for r in orig:
+        variants = [v for v in robots if variant_of(v["name"]) and base_name(v["name"]) == r["name"]]
+        if variants:
+            labo += [r] + variants
+    groups = {G_ORIG: orig, G_LABO: labo, G_RETRAITE: retraite, G_ALL: robots}
+    return {g: rs for g, rs in groups.items() if rs}
+
+
+def start_of(robot: dict) -> pd.Timestamp:
+    return pd.Timestamp(robot["created"]).tz_convert(TZ)
+
+
+def perf_since(robot: dict, t0: pd.Timestamp | None) -> tuple[float, float]:
+    """(performance, performance de l'indice) en %, depuis le départ du robot ou depuis `t0` s'il est donné."""
+    s = summary_of(robot["id"])
+    if t0 is None or t0 <= start_of(robot):
+        return s["perf"], s["bench_perf"]
+    after = curve_of(robot["id"]).loc[lambda c: c.index >= t0]
+    if after.empty:
+        return 0.0, 0.0
+    first = after.iloc[0]
+    bench_now = robot["initial_cash"] * (1 + s["bench_perf"] / 100)
+    return (s["total"] / first["value"] - 1) * 100, (bench_now / first["benchmark"] - 1) * 100
 
 # ---------------- navigation (en haut de page, toujours visible) ----------------
 if st.session_state.get("page") not in (P_RACE, P_ROBOT, P_MARKET, P_MINE, P_ECO):
@@ -646,68 +712,94 @@ if epoch == E_PAST:
 # ================= La course des robots =================
 if page == P_RACE:
     st.title("Qui veut gagner des millions")
-    start = to_local(pd.Series([robots[0]["created"]])).iloc[0] if robots else None
-    st.caption(f"Chaque robot a reçu **{eur(settings['general']['capital_fictif'])} fictifs** "
-               f"le {start:%d/%m/%Y à %H:%M}. Cours réels, frais réels. Objectif : battre l'indice mondial "
-               "(le gris pointillé).")
-    if robots:
-        leader = max(robots, key=lambda r: summary_of(r["id"])["perf"])
-        lead = summary_of(leader["id"])
-        st.markdown(f'<div class="tr-sub">En tête</div><div class="tr-hero">{leader["name"]}</div>'
-                    f'<div class="tr-perf" style="margin-top:.3rem">{signed(pct(lead["perf"]), lead["perf"] >= 0)}'
-                    f'&nbsp;&nbsp;<span style="color:{MUTED}">depuis le départ</span></div>',
-                    unsafe_allow_html=True)
+    groups = race_groups(robots)
+    group = st.segmented_control("Groupe", list(groups), default=G_ORIG if G_ORIG in groups else None,
+                                 key="course_groupe", required=True, label_visibility="collapsed") if groups else None
+    shown = groups.get(group, [])
+    # Méthodes du labo : leurs versions sont parties plus tard, tout le groupe est mesuré depuis leur départ
+    t0 = max(start_of(r) for r in shown) if group == G_LABO else None
+    if shown:
+        first = min(start_of(r) for r in shown)
+        if group == G_LABO:
+            st.caption(f"Les robots d'origine face à leurs versions du labo (anneau de la même couleur ; courbe en "
+                       f"{VARIANT_TAG['A']} = méthode A, en {VARIANT_TAG['B']} = méthode B). Tout est mesuré depuis le "
+                       f"**{t0:%d/%m/%Y à %H:%M}**, départ des versions du labo, comme si chacun repartait de "
+                       f"{eur(settings['general']['capital_fictif'])} ce jour-là.")
+        elif group == G_RETRAITE:
+            st.caption(f"Le Robot Retraité gère le vrai portefeuille de départ ; « Gilbert (inchangé) » est le même "
+                       f"portefeuille auquel on ne touche pas : c'est lui qu'il faut battre. Départ le "
+                       f"{first:%d/%m/%Y à %H:%M}.")
+        else:
+            st.caption(f"Chaque robot a reçu **{eur(settings['general']['capital_fictif'])} fictifs** "
+                       f"le {first:%d/%m/%Y à %H:%M}. Cours réels, frais réels. Objectif : battre l'indice mondial "
+                       "(le gris pointillé)." + (" Les robots ajoutés plus tard sont mesurés depuis leur propre "
+                                                 "départ." if group == G_ALL else ""))
+        perfs = {r["id"]: perf_since(r, t0) for r in shown}
+        leader = max(shown, key=lambda r: perfs[r["id"]][0])
+        lead = perfs[leader["id"]][0]
+        st.markdown(f'<div class="tr-sub">En tête</div><div class="tr-hero">{label(leader)}</div>'
+                    f'<div class="tr-perf" style="margin-top:.3rem">{signed(pct(lead), lead >= 0)}'
+                    f'&nbsp;&nbsp;<span style="color:{MUTED}">{"depuis le " + f"{t0:%d/%m}" if t0 is not None else "depuis le départ"}'
+                    f'</span></div>', unsafe_allow_html=True)
         st.write("")
 
-    cols = st.columns(len(robots))
-    for col, robot in zip(cols, robots):
-        s = summary_of(robot["id"])
-        cfg = configs[robot["name"]]
-        risk = cfg.get("risque", "")
-        diff = s["perf"] - s["bench_perf"]
-        held = ", ".join(f"{name_of(x['ticker'])} {x['valeur_eur'] / s['total']:.0%}" for x in s["positions"])
-        with col.container(key=f"card_race_{robot['id']}"):
-            st.markdown(
-                f'<div class="tr-name"><span class="tr-dot" style="background:{color_of[robot["id"]]}"></span>'
-                f'{robot["name"].replace("Robot ", "")}</div>'
-                f'<div class="tr-risk" style="color:{MUTED}">{risk_label(risk)}</div>'
-                f'<div class="tr-value">{eur2(s["total"])}</div>'
-                f'<div class="tr-perf">{signed(pct(s["perf"]), s["perf"] >= 0)}</div>'
-                f'<div class="tr-sub tr-card-sub">Face à l\'indice : {signed(pct(diff), diff >= 0)}<br>'
-                f'{held or "Aucun placement"} · liquidités {s["cash"] / s["total"]:.0%}</div>',
-                unsafe_allow_html=True)
-            st.button("Voir le détail", key=f"open_{robot['id']}", width="stretch",
-                      on_click=go_to_robot, args=(robot["name"],))
+    per_row = 5
+    for row_start in range(0, len(shown), per_row):
+        cols = st.columns(per_row)
+        for col, robot in zip(cols, shown[row_start:row_start + per_row]):
+            s = summary_of(robot["id"])
+            perf, bench_perf = perfs[robot["id"]]
+            risk = configs[robot["name"]].get("risque", "")
+            diff = perf - bench_perf
+            held = ", ".join(f"{name_of(x['ticker'])} {x['valeur_eur'] / s['total']:.0%}" for x in s["positions"])
+            with col.container(key=f"card_race_{robot['id']}"):
+                st.markdown(
+                    f'<div class="tr-name">{dot(robot)}{label(robot)}</div>'
+                    f'<div class="tr-risk" style="color:{MUTED}">{risk_label(risk)}</div>'
+                    f'<div class="tr-value">{eur2(s["total"])}</div>'
+                    f'<div class="tr-perf">{signed(pct(perf), perf >= 0)}</div>'
+                    f'<div class="tr-sub tr-card-sub">Face à l\'indice : {signed(pct(diff), diff >= 0)}<br>'
+                    f'{held or "Aucun placement"} · liquidités {s["cash"] / s["total"]:.0%}</div>',
+                    unsafe_allow_html=True)
+                st.button("Voir le détail", key=f"open_{robot['id']}", width="stretch",
+                          on_click=go_to_robot, args=(robot["name"],))
 
-    st.markdown("### Performance depuis le départ")
-    with chart_box("course"):
-        prefs = settings_panel("course", kind="courbes", units=True,
-                               series=[r["name"] for r in robots] + ["Indice mondial"])
+    st.markdown("### Performance depuis " + (f"le {t0:%d/%m/%Y}" if t0 is not None else "le départ"))
+    box = "course" if group == G_ORIG else f"course_{group}"
+    with chart_box(box):
+        prefs = settings_panel(box, kind="courbes", units=True,
+                               series=[r["name"] for r in shown] + ["Indice mondial"])
         in_pct = prefs["unite"] == "%"
         with st.spinner("Calcul des courbes à partir des vrais cours…"):
             lines, bench_line = [], None
-            for robot in robots:
+            for robot in shown:
                 curve = curve_of(robot["id"])
+                if t0 is not None:
+                    curve = curve[curve.index >= t0]
                 if curve.empty:
                     continue
                 value, bench = curve["value"], curve["benchmark"]
+                # depuis t0 : chacun repart du capital fictif ce jour-là ; sinon : depuis son propre départ
+                base_v, base_b = ((value.iloc[0], bench.iloc[0]) if t0 is not None
+                                  else (robot["initial_cash"], robot["initial_cash"]))
                 if in_pct:
-                    value = (value / robot["initial_cash"] - 1) * 100
-                    bench = (bench / robot["initial_cash"] - 1) * 100
-                lines.append((robot["name"], value, color_of[robot["id"]], "solid"))
+                    value, bench = (value / base_v - 1) * 100, (bench / base_b - 1) * 100
+                elif t0 is not None:
+                    capital = settings["general"]["capital_fictif"]
+                    value, bench = value / base_v * capital, bench / base_b * capital
+                lines.append((robot["name"], value, color_of[robot["id"]], dash_of[robot["id"]]))
                 if bench_line is None:
                     bench_line = ("Indice mondial", bench, INDEX_COLOR, "dash")
         if lines and len(lines[0][1]) >= 2:
             fig = line_chart(lines + [bench_line], "Performance (%)" if in_pct else "Valeur (€)")
-            show(apply_settings(fig, prefs), "course")
+            show(apply_settings(fig, prefs), box)
     if not (lines and len(lines[0][1]) >= 2):
         st.info("⏳ Les courbes démarrent au premier cours publié après le départ "
                 "(les cours de Francfort arrivent avec environ 20 minutes de retard).")
 
     st.markdown("### Classement")
-    if robots:
-        st.markdown(ranking_html(sorted(robots, key=lambda r: -summary_of(r["id"])["perf"])),
-                    unsafe_allow_html=True)
+    if shown:
+        st.markdown(ranking_html(sorted(shown, key=lambda r: -perfs[r["id"]][0]), t0), unsafe_allow_html=True)
 
 
 # ================= Détail d'un robot =================
